@@ -1,36 +1,30 @@
-import java.util.*
+package codegolf.medium
 
 /**
  * Auto-generated code below aims at helping you parse
  * the standard input according to the problem statement.
  **/
-fun main(args : Array<String>) {
-//    val input = Scanner(System.`in`)
-//    val N = input.nextInt()
-//    for (i in 0 until N) {
-//        val telephone = input.next()
-//    }
-//
-//    // Write an answer using println()
-//    // To debug: System.err.println("Debug messages...");
-//
-//
-//    // The number of elements (referencing a number) stored in the structure.
-//    println("number")
+fun main() {
+    val n = readln().toInt()
+    val t = List(n) { readln() }.sorted()
+    var a = 0
 
-    val d = mutableMapOf<Char, Any>()
-    var r = 0
 
-    val input = readLine() ?: ""
-    val lines = input.split("\n").drop(1)
+    for (i in 0 until n - 1) {
+        var c = 0
+        val l = t[i].length
 
-    for (line in lines) {
-        var u: MutableMap<Char, Any> = d
-        for (char in line.trim()) {
-            r += if (u.get(char) == 1) 1 else 0
-            u = u.getOrPut(char, { mutableMapOf<Char, Any>() }) as MutableMap<Char, Any>
+        for (j in 0 until l) {
+            if (t[i][j] == t[i + 1][j]) {
+                c++
+            } else {
+                break
+            }
         }
+
+        a += l - c
     }
 
-    println(r)
+    a += t[n - 1].length
+    println(a)
 }
