@@ -1,40 +1,73 @@
-fun main() {
-    val n = readLine()!!.toInt()
-    val message = readLine()!!
+package training.easy
 
-    val result = if (n > 0) {
-        decodeMessage(message)
-    } else {
-        encodeMessage(message)
+
+import java.util.Scanner
+import kotlin.math.abs
+
+/**
+ *
+ * Encoding
+ */
+fun main() {
+    val input = Scanner(System.`in`)
+    val n: Int = input.nextInt()
+
+    var absN = abs(n.toDouble()).toInt()
+
+    if (input.hasNextLine()) {
+        input.nextLine()
+    }
+    val message: String = input.nextLine()
+    var messageResult = message.toCharArray()
+
+    val mappingList = createMappingList(message)
+
+    while (absN > 0) {
+        messageResult = if (n < 0) {
+            convert(messageResult) { i: Int -> mappingList[i] }
+        } else {
+            convert(messageResult) { i: Int -> mappingList.indexOf(i) }
+        }
+        absN--
     }
 
-    println(result)
+    println(messageResult)
+
 }
 
-fun encodeMessage(message: String): String {
-    val result = StringBuilder()
-    for (i in 0 until message.length) {
-        val part = message.substring(i)
-        if (i % 2 == 0) {
-            result.insert(0, part)
+fun createMappingList(message: String): List<Int> {
+    val res: MutableList<Int> = ArrayList()
+    val mpCheck = MappingCheck()
+
+    message.indices.forEach { i: Int ->
+        if (mpCheck.add) {
+            res.add(i)
         } else {
-            result.append(part)
+            res.add(mpCheck.index++, i)
+        }
+        mpCheck.switchSide(i)
+    }
+    return res
+}
+
+fun convert(
+    message: CharArray,
+    mappingFunc: (i: Int) -> Int
+): CharArray = message.indices.map { i ->
+    message[mappingFunc(i)]
+}.toCharArray()
+
+internal class MappingCheck(
+    var add: Boolean = true,
+    private var npCharToAdd: Int = 1,
+    var index: Int = 0,
+    private var nbSwitch: Int = 0
+) {
+    fun switchSide(i: Int) {
+        if (i == nbSwitch) {
+            add = !add
+            nbSwitch += ++npCharToAdd
+            index = 0
         }
     }
-    return result.toString()
-}
-
-fun decodeMessage(message: String): String {
-    val mid = message.length / 2
-    val part1 = message.substring(mid)
-    val part2 = message.substring(0, mid)
-    val result = StringBuilder()
-    for (i in 0 until mid) {
-        result.append(part2[i])
-        result.append(part1[i])
-    }
-    if (message.length % 2 == 1) {
-        result.append(message[mid])
-    }
-    return result.toString()
 }
