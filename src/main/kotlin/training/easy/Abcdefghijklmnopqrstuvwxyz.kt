@@ -1,5 +1,10 @@
-//package training.easy
+package training.easy
 
+/**
+ * BFS
+ * DFS
+ * Arrays
+ * */
 fun main() {
     val input = Array(readln().toInt()) { readln().toCharArray().toTypedArray() }
 //        .onEach {
