@@ -31,12 +31,6 @@ open class BasePod(
     var posX: Int = position.x
     var posY: Int = position.y
 
-    // Previous velocities for inertia calculation
-    var previousVelocities: MutableList<Pair<Int, Int>> = mutableListOf()
-
-    // Inertia coefficient (how much previous velocity affects current movement)
-    var inertiaCoefficient: Double = 0.85 // Default value, can be adjusted
-
     fun distanceToCheckpoint(checkpoint: Checkpoint): Double = 
         Point.distanceBetween(posX, posY, checkpoint.position.x, checkpoint.position.y)
 
@@ -47,13 +41,6 @@ open class BasePod(
     }
 
     open fun update(x: Int, y: Int, vx: Int, vy: Int, angle: Int, nextCheckpointId: Int) {
-        // Store previous velocity for inertia calculation
-        previousVelocities.add(velocity)
-        // Keep only the last 5 velocities to avoid memory issues
-        if (previousVelocities.size > 5) {
-            previousVelocities.removeAt(0)
-        }
-
         // Update position coordinates directly
         posX = x
         posY = y
@@ -64,52 +51,11 @@ open class BasePod(
         this.nextCheckpointId = nextCheckpointId
     }
 
-    // Calculate the inertia coefficient based on previous velocities
-    fun calculateInertiaCoefficient(): Double {
-        if (previousVelocities.isEmpty()) return inertiaCoefficient
-
-        // Calculate how much the actual velocity matches the expected velocity
-        val velocityChanges = mutableListOf<Double>()
-
-        for (i in 1 until previousVelocities.size) {
-            val prev = previousVelocities[i-1]
-            val current = previousVelocities[i]
-
-            // Calculate expected velocity without inertia
-            val expectedVx = prev.first
-            val expectedVy = prev.second
-
-            // Calculate how much the actual velocity differs from expected
-            val diffX = current.first - expectedVx
-            val diffY = current.second - expectedVy
-
-            // Calculate the magnitude of the difference
-            val diffMagnitude = sqrt(diffX.toDouble().pow(2) + diffY.toDouble().pow(2))
-
-            // Calculate the magnitude of the previous velocity
-            val prevMagnitude = sqrt(prev.first.toDouble().pow(2) + prev.second.toDouble().pow(2))
-
-            // Calculate the ratio of actual to expected velocity (if previous velocity is not zero)
-            if (prevMagnitude > 0) {
-                velocityChanges.add(diffMagnitude / prevMagnitude)
-            }
-        }
-
-        // Calculate the average velocity change ratio
-        return if (velocityChanges.isNotEmpty()) {
-            val avgChange = velocityChanges.average()
-            // Clamp the inertia coefficient between 0.5 and 0.95
-            inertiaCoefficient = 0.5 + (0.45 * (1.0 - avgChange)).coerceIn(0.0, 0.45)
-            inertiaCoefficient
-        } else {
-            inertiaCoefficient
-        }
-    }
 
     // Predict the actual velocity after applying thrust, considering inertia
     fun predictActualVelocity(targetAngle: Double, thrust: Int): Pair<Double, Double> {
-        // Calculate the inertia coefficient
-        val inertia = calculateInertiaCoefficient()
+        // Use the fixed inertia value
+        val inertia = 0.85
 
         // Convert angle to radians
         val angleRad = targetAngle * PI / 180.0
@@ -140,9 +86,8 @@ abstract class MyPod(
     var useShield: Boolean = false
     var useBoost: Boolean = false
 
-    // For testing different inertia values
-    var testInertiaMode: Boolean = true
-    var testInertiaValue: Double = 0.85 // Starting test value
+    // Fixed inertia value
+    var testInertiaValue: Double = 0.85
 
     // Collision prediction parameters
     val collisionRadius = 400 // Radius to consider for collision (pod radius is 400)
@@ -268,22 +213,11 @@ abstract class MyPod(
 
     // Adjust thrust based on inertia to compensate for pod's momentum
     protected fun adjustThrustForInertia(baseThrust: Int, angleDiff: Double, targetCheckpoint: Checkpoint): Int {
-        // If in test mode, use the test inertia value
-        if (testInertiaMode) {
-            inertiaCoefficient = testInertiaValue
-        } else {
-            // Otherwise calculate the inertia coefficient based on previous velocities
-            calculateInertiaCoefficient()
-        }
-
         // Get the angle to the checkpoint in radians
         val targetAngle = Point.angleBetween(posX, posY, targetCheckpoint.position.x, targetCheckpoint.position.y) * PI / 180.0
 
         // Predict the actual velocity after applying thrust
         val predictedVelocity = predictActualVelocity(targetAngle, baseThrust)
-
-        // Calculate the magnitude of the predicted velocity
-        val predictedSpeed = sqrt(predictedVelocity.first.pow(2) + predictedVelocity.second.pow(2))
 
         // Calculate the current speed
         val currentSpeed = sqrt(velocity.first.toDouble().pow(2) + velocity.second.toDouble().pow(2))
@@ -310,11 +244,10 @@ abstract class MyPod(
 
     // Log inertia information for debugging
     protected fun logInertiaInfo(podType: String) {
-        val inertia = if (testInertiaMode) testInertiaValue else inertiaCoefficient
         val speed = sqrt(velocity.first.toDouble().pow(2) + velocity.second.toDouble().pow(2))
 
         System.err.println("Pod $podType - " +
-                "Inertia: $inertia, " +
+                "Inertia: $testInertiaValue, " +
                 "Speed: $speed, " +
                 "Velocity: (${velocity.first}, ${velocity.second}), " +
                 "Thrust: $thrust")
@@ -549,28 +482,16 @@ fun main(args : Array<String>) {
     var boostAvailable = true
     var turn = 0
 
-    // For testing different inertia values
-    var testInertiaPhase = 0
-    val testInertiaValues = listOf(0.75, 0.80, 0.85, 0.90, 0.95)
-    var currentTestInertia = testInertiaValues[0]
-    var phaseStartTurn = 0
-    val phaseDuration = 20 // Test each inertia value for 20 turns
+    // Using the best inertia value (0.85) as determined by testing
+    var currentTestInertia = 0.85 // Fixed to the best value
 
-    // Performance metrics for each inertia value
+    // Performance metrics for the fixed inertia value
     val inertiaPerformance = mutableMapOf<Double, MutableList<Double>>()
-    testInertiaValues.forEach { inertiaPerformance[it] = mutableListOf() }
+    inertiaPerformance[currentTestInertia] = mutableListOf()
 
     // game loop
     while (true) {
         turn++
-
-        // Update test inertia value periodically
-        if (turn - phaseStartTurn >= phaseDuration) {
-            testInertiaPhase = (testInertiaPhase + 1) % testInertiaValues.size
-            currentTestInertia = testInertiaValues[testInertiaPhase]
-            phaseStartTurn = turn
-            System.err.println("Switching to test inertia value: $currentTestInertia")
-        }
 
         // Update my pods
         for (i in 0 until 2) {
@@ -632,7 +553,7 @@ fun main(args : Array<String>) {
         // Calculate target and thrust for blocker pod
         blockerPod.calculateBlockerTarget(leadingOpponent, checkpoints, blockOpponent)
 
-        // Record performance metrics for current inertia value
+        // Record performance metrics for the fixed inertia value (0.85)
         val racerSpeed = sqrt(racerPod.velocity.first.toDouble().pow(2) + racerPod.velocity.second.toDouble().pow(2))
         val racerDistanceToCheckpoint = racerPod.distanceToCheckpoint(checkpoints[racerPod.nextCheckpointId])
         val racerPerformanceScore = racerSpeed / (racerDistanceToCheckpoint + 1.0) * 1000 // Higher is better
@@ -641,24 +562,14 @@ fun main(args : Array<String>) {
 
         // Output performance summary every 10 turns
         if (turn % 10 == 0) {
-            System.err.println("===== INERTIA PERFORMANCE SUMMARY =====")
-            inertiaPerformance.forEach { (inertia, scores) ->
-                if (scores.isNotEmpty()) {
-                    val avgScore = scores.average()
-                    System.err.println("Inertia $inertia: Avg Score = $avgScore (${scores.size} samples)")
-                }
+            System.err.println("===== PERFORMANCE SUMMARY =====")
+            val scores = inertiaPerformance[currentTestInertia]
+            if (scores != null && scores.isNotEmpty()) {
+                val avgScore = scores.average()
+                System.err.println("Using fixed inertia value: 0.85")
+                System.err.println("Average Score = $avgScore (${scores.size} samples)")
             }
-
-            // Find the best inertia value so far
-            val bestInertia = inertiaPerformance.entries
-                .filter { it.value.isNotEmpty() }
-                .maxByOrNull { it.value.average() }
-                ?.key
-
-            if (bestInertia != null) {
-                System.err.println("BEST INERTIA VALUE SO FAR: $bestInertia")
-            }
-            System.err.println("=======================================")
+            System.err.println("===============================")
         }
 
         // Output commands for both pods
