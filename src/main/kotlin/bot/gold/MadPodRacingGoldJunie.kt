@@ -21,21 +21,13 @@ enum class PodRole {
     RACER, BLOCKER
 }
 
-class Pod(
+// Base Pod class with common functionality
+open class BasePod(
     var position: Point,
     var velocity: Pair<Int, Int>,
     var angle: Int,
-    var nextCheckpointId: Int,
-    var boostAvailable: Boolean = true,
-    var shieldCooldown: Int = 0,
-    var role: PodRole = PodRole.RACER
+    var nextCheckpointId: Int
 ) {
-    var targetX: Int = 0
-    var targetY: Int = 0
-    var thrust: Int = 100
-    var useShield: Boolean = false
-    var useBoost: Boolean = false
-
     fun distanceToCheckpoint(checkpoint: Checkpoint): Double = 
         position.distance(checkpoint.position)
 
@@ -45,11 +37,32 @@ class Pod(
         return if (angleDiff > 180) angleDiff - 360 else angleDiff
     }
 
-    fun update(x: Int, y: Int, vx: Int, vy: Int, angle: Int, nextCheckpointId: Int) {
+    open fun update(x: Int, y: Int, vx: Int, vy: Int, angle: Int, nextCheckpointId: Int) {
         position = Point(x, y)
         velocity = Pair(vx, vy)
         this.angle = angle
         this.nextCheckpointId = nextCheckpointId
+    }
+}
+
+// MyPod class for player-controlled pods
+class MyPod(
+    position: Point,
+    velocity: Pair<Int, Int>,
+    angle: Int,
+    nextCheckpointId: Int,
+    var boostAvailable: Boolean = true,
+    var shieldCooldown: Int = 0,
+    var role: PodRole = PodRole.RACER
+) : BasePod(position, velocity, angle, nextCheckpointId) {
+    var targetX: Int = 0
+    var targetY: Int = 0
+    var thrust: Int = 100
+    var useShield: Boolean = false
+    var useBoost: Boolean = false
+
+    override fun update(x: Int, y: Int, vx: Int, vy: Int, angle: Int, nextCheckpointId: Int) {
+        super.update(x, y, vx, vy, angle, nextCheckpointId)
 
         // Update shield cooldown
         if (shieldCooldown > 0) {
@@ -75,7 +88,7 @@ class Pod(
         }
     }
 
-    fun calculateThrust(checkpoints: List<Checkpoint>, turn: Int, opponentPods: List<Pod>, sharedBoostAvailable: Boolean) {
+    fun calculateThrust(checkpoints: List<Checkpoint>, turn: Int, opponentPods: List<OpponentPod>, sharedBoostAvailable: Boolean) {
         val currentCheckpoint = checkpoints[nextCheckpointId]
         val distance = distanceToCheckpoint(currentCheckpoint)
         val angleDiff = Math.abs(angleToCheckpoint(currentCheckpoint))
@@ -111,7 +124,7 @@ class Pod(
         }
     }
 
-    fun calculateBlockerTarget(leadingOpponent: Pod, checkpoints: List<Checkpoint>, blockOpponent: Boolean) {
+    fun calculateBlockerTarget(leadingOpponent: OpponentPod, checkpoints: List<Checkpoint>, blockOpponent: Boolean) {
         if (blockOpponent) {
             // Aim to intercept the leading opponent
             targetX = leadingOpponent.position.x + leadingOpponent.velocity.first
@@ -147,6 +160,16 @@ class Pod(
     }
 }
 
+// OpponentPod class for tracking opponent pods
+class OpponentPod(
+    position: Point,
+    velocity: Pair<Int, Int>,
+    angle: Int,
+    nextCheckpointId: Int
+) : BasePod(position, velocity, angle, nextCheckpointId) {
+    // Opponent-specific functionality can be added here if needed
+}
+
 fun main(args : Array<String>) {
     val input = Scanner(System.`in`)
     val laps = input.nextInt()
@@ -163,14 +186,14 @@ fun main(args : Array<String>) {
     System.err.println("Race initialized: $laps laps, $checkpointCount checkpoints")
 
     // Initialize pods with default values
-    val myPods = mutableListOf(
-        Pod(Point(0, 0), Pair(0, 0), 0, 0, true, 0, PodRole.RACER),
-        Pod(Point(0, 0), Pair(0, 0), 0, 0, true, 0, PodRole.BLOCKER)
+    val myPods = mutableListOf<MyPod>(
+        MyPod(Point(0, 0), Pair(0, 0), 0, 0, true, 0, PodRole.RACER),
+        MyPod(Point(0, 0), Pair(0, 0), 0, 0, true, 0, PodRole.BLOCKER)
     )
 
-    val opponentPods = mutableListOf(
-        Pod(Point(0, 0), Pair(0, 0), 0, 0, false, 0),
-        Pod(Point(0, 0), Pair(0, 0), 0, 0, false, 0)
+    val opponentPods = mutableListOf<OpponentPod>(
+        OpponentPod(Point(0, 0), Pair(0, 0), 0, 0),
+        OpponentPod(Point(0, 0), Pair(0, 0), 0, 0)
     )
 
     // Shared boost between pods
