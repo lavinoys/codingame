@@ -165,9 +165,21 @@ class OpponentPod(
     position: Point,
     velocity: Pair<Int, Int>,
     angle: Int,
-    nextCheckpointId: Int
+    nextCheckpointId: Int,
+    var laps: Int = 0,
+    var previousCheckpointId: Int = 0
 ) : BasePod(position, velocity, angle, nextCheckpointId) {
-    // Opponent-specific functionality can be added here if needed
+
+    override fun update(x: Int, y: Int, vx: Int, vy: Int, angle: Int, nextCheckpointId: Int) {
+        // Track lap completion - if we've gone from last checkpoint to first checkpoint
+        if (this.nextCheckpointId != nextCheckpointId && this.nextCheckpointId > nextCheckpointId) {
+            laps++
+            System.err.println("Opponent completed a lap! Now on lap: $laps")
+        }
+
+        previousCheckpointId = this.nextCheckpointId
+        super.update(x, y, vx, vy, angle, nextCheckpointId)
+    }
 }
 
 fun main(args : Array<String>) {
@@ -192,8 +204,8 @@ fun main(args : Array<String>) {
     )
 
     val opponentPods = mutableListOf<OpponentPod>(
-        OpponentPod(Point(0, 0), Pair(0, 0), 0, 0),
-        OpponentPod(Point(0, 0), Pair(0, 0), 0, 0)
+        OpponentPod(Point(0, 0), Pair(0, 0), 0, 0, 0, 0),
+        OpponentPod(Point(0, 0), Pair(0, 0), 0, 0, 0, 0)
     )
 
     // Shared boost between pods
@@ -228,12 +240,13 @@ fun main(args : Array<String>) {
             opponentPods[i].update(opponentPositionX, opponentPositionY, opponentVelocityX, opponentVelocityY, opponentAngle, opponentNextCheckpointId)
         }
 
-        // Find the leading opponent pod (closest to its next checkpoint)
-        val leadingOpponentIndex = if (opponentPods[0].distanceToCheckpoint(checkpoints[opponentPods[0].nextCheckpointId]) < 
-                                      opponentPods[1].distanceToCheckpoint(checkpoints[opponentPods[1].nextCheckpointId])) 0 else 1
+        // Find the opponent pod with highest progress (considering laps and checkpoint ID)
+        val leadingOpponentIndex = if (opponentPods[0].laps > opponentPods[1].laps || 
+                                     (opponentPods[0].laps == opponentPods[1].laps && 
+                                      opponentPods[0].nextCheckpointId > opponentPods[1].nextCheckpointId)) 0 else 1
 
         val leadingOpponent = opponentPods[leadingOpponentIndex]
-        val opponentProgress = "${leadingOpponent.nextCheckpointId}, Progress: ${Random().nextDouble() + leadingOpponent.nextCheckpointId}"
+        val opponentProgress = "Lap: ${leadingOpponent.laps}, CP: ${leadingOpponent.nextCheckpointId}"
         System.err.println("Targeting opponent $leadingOpponentIndex: CP $opponentProgress")
 
         // Strategy for first pod (Racer)
@@ -251,8 +264,8 @@ fun main(args : Array<String>) {
         // Strategy for second pod (Blocker/Interceptor)
         val blockerPod = myPods[1]
 
-        // Decide whether to block opponent or race
-        val blockOpponent = turn > 5 && Random().nextDouble() < 0.3
+        // Always block the opponent with highest progress
+        val blockOpponent = true
 
         // Calculate target and thrust for blocker pod
         blockerPod.calculateBlockerTarget(leadingOpponent, checkpoints, blockOpponent)
