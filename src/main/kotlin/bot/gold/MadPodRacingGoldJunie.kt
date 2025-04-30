@@ -9,10 +9,19 @@ import kotlin.math.*
 // Data classes for game entities
 data class Point(val x: Int, val y: Int) {
     fun distance(other: Point): Double = 
-        sqrt((x - other.x).toDouble().pow(2) + (y - other.y).toDouble().pow(2))
+        distanceBetween(x, y, other.x, other.y)
 
     fun angle(other: Point): Double = 
-        atan2((other.y - y).toDouble(), (other.x - x).toDouble()) * 180 / PI
+        angleBetween(x, y, other.x, other.y)
+
+    companion object {
+        // Static methods to avoid creating temporary Point objects
+        fun distanceBetween(x1: Int, y1: Int, x2: Int, y2: Int): Double =
+            sqrt((x1 - x2).toDouble().pow(2) + (y1 - y2).toDouble().pow(2))
+
+        fun angleBetween(x1: Int, y1: Int, x2: Int, y2: Int): Double =
+            atan2((y2 - y1).toDouble(), (x2 - x1).toDouble()) * 180 / PI
+    }
 }
 
 data class Checkpoint(val position: Point, val id: Int)
@@ -28,16 +37,24 @@ open class BasePod(
     var angle: Int,
     var nextCheckpointId: Int
 ) {
+    // Store position coordinates directly to avoid creating Point objects
+    var posX: Int = position.x
+    var posY: Int = position.y
+
     fun distanceToCheckpoint(checkpoint: Checkpoint): Double = 
-        position.distance(checkpoint.position)
+        Point.distanceBetween(posX, posY, checkpoint.position.x, checkpoint.position.y)
 
     fun angleToCheckpoint(checkpoint: Checkpoint): Double {
-        val targetAngle = position.angle(checkpoint.position)
+        val targetAngle = Point.angleBetween(posX, posY, checkpoint.position.x, checkpoint.position.y)
         val angleDiff = (targetAngle - angle + 360) % 360
         return if (angleDiff > 180) angleDiff - 360 else angleDiff
     }
 
     open fun update(x: Int, y: Int, vx: Int, vy: Int, angle: Int, nextCheckpointId: Int) {
+        // Update position coordinates directly
+        posX = x
+        posY = y
+        // Update Point object only once
         position = Point(x, y)
         velocity = Pair(vx, vy)
         this.angle = angle
@@ -76,15 +93,21 @@ class MyPod(
         val nextCheckpoint = checkpoints[nextCheckpointId]
         val distance = distanceToCheckpoint(currentCheckpoint)
 
+        // Get checkpoint coordinates directly
+        val currentX = currentCheckpoint.position.x
+        val currentY = currentCheckpoint.position.y
+
         if (distance < 1200 && role == PodRole.RACER) {
-            // If close to checkpoint, aim for the next one
-            val nextX = currentCheckpoint.position.x + (nextCheckpoint.position.x - currentCheckpoint.position.x) * 0.3
-            val nextY = currentCheckpoint.position.y + (nextCheckpoint.position.y - currentCheckpoint.position.y) * 0.3
-            targetX = nextX.toInt()
-            targetY = nextY.toInt()
+            // If close to checkpoint, aim for the next one - calculate directly without creating temporary objects
+            val nextCheckpointX = nextCheckpoint.position.x
+            val nextCheckpointY = nextCheckpoint.position.y
+
+            // Calculate vector directly
+            targetX = (currentX + (nextCheckpointX - currentX) * 0.3).toInt()
+            targetY = (currentY + (nextCheckpointY - currentY) * 0.3).toInt()
         } else {
-            targetX = currentCheckpoint.position.x
-            targetY = currentCheckpoint.position.y
+            targetX = currentX
+            targetY = currentY
         }
     }
 
@@ -117,7 +140,8 @@ class MyPod(
         // Decide whether to use shield
         if (shieldCooldown == 0 && 
             opponentPods.any { 
-                position.distance(it.position) < 850 && 
+                // Use static method to avoid creating temporary objects
+                Point.distanceBetween(posX, posY, it.posX, it.posY) < 850 && 
                 Math.abs(velocity.first - it.velocity.first) + Math.abs(velocity.second - it.velocity.second) > 300 
             }) {
             useShield = true
@@ -126,12 +150,12 @@ class MyPod(
 
     fun calculateBlockerTarget(leadingOpponent: OpponentPod, checkpoints: List<Checkpoint>, blockOpponent: Boolean) {
         if (blockOpponent) {
-            // Aim to intercept the leading opponent
-            targetX = leadingOpponent.position.x + leadingOpponent.velocity.first
-            targetY = leadingOpponent.position.y + leadingOpponent.velocity.second
+            // Aim to intercept the leading opponent - use direct coordinates
+            targetX = leadingOpponent.posX + leadingOpponent.velocity.first
+            targetY = leadingOpponent.posY + leadingOpponent.velocity.second
             thrust = 100
         } else {
-            // Race normally
+            // Race normally - use direct coordinates
             val currentCheckpoint = checkpoints[nextCheckpointId]
             targetX = currentCheckpoint.position.x
             targetY = currentCheckpoint.position.y
@@ -187,25 +211,30 @@ fun main(args : Array<String>) {
     val laps = input.nextInt()
     val checkpointCount = input.nextInt()
 
-    // Store checkpoints
+    // Store checkpoints - create Point objects only once during initialization
     val checkpoints = mutableListOf<Checkpoint>()
     for (i in 0 until checkpointCount) {
         val checkpointX = input.nextInt()
         val checkpointY = input.nextInt()
+        // Point objects for checkpoints are created only once at the beginning
         checkpoints.add(Checkpoint(Point(checkpointX, checkpointY), i))
     }
 
     System.err.println("Race initialized: $laps laps, $checkpointCount checkpoints")
 
-    // Initialize pods with default values
+    // Initialize pods with default values - create Point objects only once
+    // These Point objects will be reused and updated in-place
+    val initialPoint = Point(0, 0)
+    val initialVelocity = Pair(0, 0)
+
     val myPods = mutableListOf<MyPod>(
-        MyPod(Point(0, 0), Pair(0, 0), 0, 0, true, 0, PodRole.RACER),
-        MyPod(Point(0, 0), Pair(0, 0), 0, 0, true, 0, PodRole.BLOCKER)
+        MyPod(initialPoint, initialVelocity, 0, 0, true, 0, PodRole.RACER),
+        MyPod(initialPoint, initialVelocity, 0, 0, true, 0, PodRole.BLOCKER)
     )
 
     val opponentPods = mutableListOf<OpponentPod>(
-        OpponentPod(Point(0, 0), Pair(0, 0), 0, 0, 0, 0),
-        OpponentPod(Point(0, 0), Pair(0, 0), 0, 0, 0, 0)
+        OpponentPod(initialPoint, initialVelocity, 0, 0, 0, 0),
+        OpponentPod(initialPoint, initialVelocity, 0, 0, 0, 0)
     )
 
     // Shared boost between pods
