@@ -20,10 +20,6 @@ data class Point(val x: Int, val y: Int) {
 
 data class Checkpoint(val position: Point, val id: Int)
 
-enum class PodRole {
-    RACER, BLOCKER
-}
-
 // Base Pod class with common functionality
 open class BasePod(
     var position: Point,
@@ -130,14 +126,13 @@ open class BasePod(
     }
 }
 
-// MyPod class for player-controlled pods
-class MyPod(
+// Abstract base class for player-controlled pods
+abstract class MyPod(
     position: Point,
     velocity: Pair<Int, Int>,
     angle: Int,
     nextCheckpointId: Int,
-    var shieldCooldown: Int = 0,
-    var role: PodRole = PodRole.RACER
+    var shieldCooldown: Int = 0
 ) : BasePod(position, velocity, angle, nextCheckpointId) {
     var targetX: Int = 0
     var targetY: Int = 0
@@ -149,6 +144,11 @@ class MyPod(
     var testInertiaMode: Boolean = true
     var testInertiaValue: Double = 0.85 // Starting test value
 
+    // Collision prediction parameters
+    val collisionRadius = 400 // Radius to consider for collision (pod radius is 400)
+    val collisionTimeThreshold = 3 // Number of turns to look ahead for collision prediction
+    val collisionProbabilityThreshold = 0.7 // Probability threshold to activate shield
+
     override fun update(x: Int, y: Int, vx: Int, vy: Int, angle: Int, nextCheckpointId: Int) {
         super.update(x, y, vx, vy, angle, nextCheckpointId)
 
@@ -158,75 +158,116 @@ class MyPod(
         }
     }
 
-    fun calculateTarget(checkpoints: List<Checkpoint>, checkpointCount: Int) {
-        val currentCheckpoint = checkpoints[nextCheckpointId]
-        val nextCheckpointId = (nextCheckpointId + 1) % checkpointCount
-        val nextCheckpoint = checkpoints[nextCheckpointId]
-        val distance = distanceToCheckpoint(currentCheckpoint)
+    // Predict collision with opponent pods
+    protected fun predictCollision(opponentPod: OpponentPod): Pair<Double, Double> {
+        // Calculate relative position and velocity
+        val relativeX = opponentPod.posX - posX
+        val relativeY = opponentPod.posY - posY
+        val relativeVX = opponentPod.velocity.first - velocity.first
+        val relativeVY = opponentPod.velocity.second - velocity.second
 
-        // Get checkpoint coordinates directly
-        val currentX = currentCheckpoint.position.x
-        val currentY = currentCheckpoint.position.y
+        // Calculate relative speed
+        val relativeSpeed = sqrt(
+            relativeVX.toDouble() * relativeVX.toDouble() + 
+            relativeVY.toDouble() * relativeVY.toDouble()
+        )
 
-        if (distance < 1200 && role == PodRole.RACER) {
-            // If close to checkpoint, aim for the next one - calculate directly without creating temporary objects
-            val nextCheckpointX = nextCheckpoint.position.x
-            val nextCheckpointY = nextCheckpoint.position.y
+        // Make collision radius dynamic based on relative speed
+        // Higher speeds need larger collision radius to account for movement between turns
+        val dynamicCollisionRadius = collisionRadius + (relativeSpeed * 0.5).toInt().coerceAtMost(400)
 
-            // Calculate vector directly
-            targetX = (currentX + (nextCheckpointX - currentX) * 0.3).toInt()
-            targetY = (currentY + (nextCheckpointY - currentY) * 0.3).toInt()
+        // Calculate quadratic equation coefficients for collision time
+        // ||p + vt|| = r, where p is relative position, v is relative velocity, r is collision radius
+        val a = relativeVX.toDouble() * relativeVX.toDouble() + relativeVY.toDouble() * relativeVY.toDouble()
+        val b = 2.0 * (relativeX.toDouble() * relativeVX.toDouble() + relativeY.toDouble() * relativeVY.toDouble())
+        val c = relativeX.toDouble() * relativeX.toDouble() + relativeY.toDouble() * relativeY.toDouble() - dynamicCollisionRadius.toDouble() * dynamicCollisionRadius.toDouble()
+
+        // If pods are not moving relative to each other
+        if (a < 0.0001) {
+            // If already colliding
+            if (c <= 0) {
+                return Pair(0.0, 1.0) // Immediate collision with 100% probability
+            }
+            return Pair(Double.MAX_VALUE, 0.0) // No collision
+        }
+
+        // Calculate discriminant
+        val discriminant = b * b - 4 * a * c
+
+        // No real solutions, no collision
+        if (discriminant < 0) {
+            return Pair(Double.MAX_VALUE, 0.0)
+        }
+
+        // Calculate collision times
+        val t1 = (-b - sqrt(discriminant)) / (2 * a)
+        val t2 = (-b + sqrt(discriminant)) / (2 * a)
+
+        // Find the earliest positive collision time
+        val collisionTime = when {
+            t1 > 0 -> t1
+            t2 > 0 -> t2
+            else -> Double.MAX_VALUE // No future collision
+        }
+
+        // Calculate collision probability based on time
+        val probability = if (collisionTime < Double.MAX_VALUE) {
+            // Higher probability for closer collisions, lower for farther ones
+            (1.0 - (collisionTime / collisionTimeThreshold).coerceAtMost(1.0))
         } else {
-            targetX = currentX
-            targetY = currentY
+            0.0
         }
+
+        return Pair(collisionTime, probability)
     }
 
-    fun calculateThrust(checkpoints: List<Checkpoint>, turn: Int, opponentPods: List<OpponentPod>, sharedBoostAvailable: Boolean) {
-        val currentCheckpoint = checkpoints[nextCheckpointId]
-        val distance = distanceToCheckpoint(currentCheckpoint)
-        val angleDiff = Math.abs(angleToCheckpoint(currentCheckpoint))
-
-        // Reset flags
-        useShield = false
-        useBoost = false
-
-        // Determine base thrust based on angle and distance
-        val baseThrust = when {
-            angleDiff > 90 -> 0
-            angleDiff > 50 -> 50
-            distance < 1000 -> 70
-            else -> 100
+    // Check if we should activate shield based on collision prediction
+    protected fun shouldActivateShield(opponentPods: List<OpponentPod>): Boolean {
+        // If shield is on cooldown, we can't use it
+        if (shieldCooldown > 0) {
+            return false
         }
 
-        // Adjust thrust based on inertia
-        thrust = adjustThrustForInertia(baseThrust, angleDiff, currentCheckpoint)
+        // Check collision with each opponent pod
+        for (opponentPod in opponentPods) {
+            val (collisionTime, probability) = predictCollision(opponentPod)
 
-        // Decide whether to use boost
-        if (sharedBoostAvailable && 
-            angleDiff < 10 && 
-            distance > 5000 &&
-            turn > 3 &&
-            role == PodRole.RACER) {
-            useBoost = true
+            // Log collision prediction data for debugging
+            if (collisionTime < 5) {  // Only log if collision is within 5 turns
+                val distance = Point.distanceBetween(posX, posY, opponentPod.posX, opponentPod.posY)
+                val relativeSpeed = sqrt(
+                    Math.pow((velocity.first - opponentPod.velocity.first).toDouble(), 2.0) +
+                    Math.pow((velocity.second - opponentPod.velocity.second).toDouble(), 2.0)
+                )
+                val dynamicRadius = collisionRadius + (relativeSpeed * 0.5).toInt().coerceAtMost(400)
+                System.err.println("Collision prediction: Time=$collisionTime, Prob=$probability, Dist=$distance, RelSpeed=$relativeSpeed, Radius=$dynamicRadius")
+            }
+
+            // If collision is imminent and probable
+            if (collisionTime < collisionTimeThreshold && probability > collisionProbabilityThreshold) {
+                // Calculate relative speed to determine impact force
+                val relativeSpeed = sqrt(
+                    Math.pow((velocity.first - opponentPod.velocity.first).toDouble(), 2.0) +
+                    Math.pow((velocity.second - opponentPod.velocity.second).toDouble(), 2.0)
+                )
+
+                // Only activate shield for high-impact collisions
+                if (relativeSpeed > 300) {
+                    System.err.println("Shield activated! Collision predicted in $collisionTime turns with probability $probability, speed: $relativeSpeed")
+                    return true
+                }
+            }
         }
 
-        // Decide whether to use shield
-        if (shieldCooldown == 0 && 
-            opponentPods.any { 
-                // Use static method to avoid creating temporary objects
-                Point.distanceBetween(posX, posY, it.posX, it.posY) < 850 && 
-                Math.abs(velocity.first - it.velocity.first) + Math.abs(velocity.second - it.velocity.second) > 300 
-            }) {
-            useShield = true
-        }
-
-        // Log inertia information for debugging
-        logInertiaInfo()
+        return false
     }
+
+    // Abstract methods to be implemented by subclasses
+    abstract fun calculateTarget(checkpoints: List<Checkpoint>, checkpointCount: Int)
+    abstract fun calculateThrust(checkpoints: List<Checkpoint>, turn: Int, opponentPods: List<OpponentPod>, sharedBoostAvailable: Boolean)
 
     // Adjust thrust based on inertia to compensate for pod's momentum
-    private fun adjustThrustForInertia(baseThrust: Int, angleDiff: Double, targetCheckpoint: Checkpoint): Int {
+    protected fun adjustThrustForInertia(baseThrust: Int, angleDiff: Double, targetCheckpoint: Checkpoint): Int {
         // If in test mode, use the test inertia value
         if (testInertiaMode) {
             inertiaCoefficient = testInertiaValue
@@ -268,36 +309,15 @@ class MyPod(
     }
 
     // Log inertia information for debugging
-    private fun logInertiaInfo() {
+    protected fun logInertiaInfo(podType: String) {
         val inertia = if (testInertiaMode) testInertiaValue else inertiaCoefficient
         val speed = sqrt(velocity.first.toDouble().pow(2) + velocity.second.toDouble().pow(2))
 
-        System.err.println("Pod ${if (role == PodRole.RACER) "RACER" else "BLOCKER"} - " +
+        System.err.println("Pod $podType - " +
                 "Inertia: $inertia, " +
                 "Speed: $speed, " +
                 "Velocity: (${velocity.first}, ${velocity.second}), " +
                 "Thrust: $thrust")
-    }
-
-    fun calculateBlockerTarget(leadingOpponent: OpponentPod, checkpoints: List<Checkpoint>, blockOpponent: Boolean) {
-        if (blockOpponent) {
-            // Aim to intercept the leading opponent - use direct coordinates
-            targetX = leadingOpponent.posX + leadingOpponent.velocity.first
-            targetY = leadingOpponent.posY + leadingOpponent.velocity.second
-            thrust = 100
-        } else {
-            // Race normally - use direct coordinates
-            val currentCheckpoint = checkpoints[nextCheckpointId]
-            targetX = currentCheckpoint.position.x
-            targetY = currentCheckpoint.position.y
-
-            val angleDiff = Math.abs(angleToCheckpoint(currentCheckpoint))
-            thrust = when {
-                angleDiff > 90 -> 0
-                angleDiff > 50 -> 50
-                else -> 100
-            }
-        }
     }
 
     fun getCommand(): String {
@@ -312,6 +332,163 @@ class MyPod(
         if (useShield) {
             shieldCooldown = 3
         }
+    }
+}
+
+// RacerPod class for racing strategy
+class RacerPod(
+    position: Point,
+    velocity: Pair<Int, Int>,
+    angle: Int,
+    nextCheckpointId: Int,
+    shieldCooldown: Int = 0
+) : MyPod(position, velocity, angle, nextCheckpointId, shieldCooldown) {
+
+    override fun calculateTarget(checkpoints: List<Checkpoint>, checkpointCount: Int) {
+        val currentCheckpoint = checkpoints[nextCheckpointId]
+        val nextCheckpointId = (nextCheckpointId + 1) % checkpointCount
+        val nextCheckpoint = checkpoints[nextCheckpointId]
+        val distance = distanceToCheckpoint(currentCheckpoint)
+
+        // Get checkpoint coordinates directly
+        val currentX = currentCheckpoint.position.x
+        val currentY = currentCheckpoint.position.y
+
+        if (distance < 1200) {
+            // If close to checkpoint, aim for the next one - calculate directly without creating temporary objects
+            val nextCheckpointX = nextCheckpoint.position.x
+            val nextCheckpointY = nextCheckpoint.position.y
+
+            // Calculate vector directly
+            targetX = (currentX + (nextCheckpointX - currentX) * 0.3).toInt()
+            targetY = (currentY + (nextCheckpointY - currentY) * 0.3).toInt()
+        } else {
+            targetX = currentX
+            targetY = currentY
+        }
+    }
+
+    override fun calculateThrust(checkpoints: List<Checkpoint>, turn: Int, opponentPods: List<OpponentPod>, sharedBoostAvailable: Boolean) {
+        val currentCheckpoint = checkpoints[nextCheckpointId]
+        val distance = distanceToCheckpoint(currentCheckpoint)
+        val angleDiff = Math.abs(angleToCheckpoint(currentCheckpoint))
+
+        // Reset flags
+        useShield = false
+        useBoost = false
+
+        // Determine base thrust based on angle and distance
+        val baseThrust = when {
+            angleDiff > 90 -> 0
+            angleDiff > 50 -> 50
+            distance < 1000 -> 70
+            else -> 100
+        }
+
+        // Adjust thrust based on inertia
+        thrust = adjustThrustForInertia(baseThrust, angleDiff, currentCheckpoint)
+
+        // Decide whether to use boost
+        if (sharedBoostAvailable && 
+            angleDiff < 10 && 
+            distance > 5000 &&
+            turn > 3) {
+            useBoost = true
+        }
+
+        // Decide whether to use shield - use collision prediction
+        useShield = shouldActivateShield(opponentPods)
+
+        // Log inertia information for debugging
+        logInertiaInfo("RACER")
+    }
+}
+
+// BlockerPod class for blocking/intercepting strategy
+class BlockerPod(
+    position: Point,
+    velocity: Pair<Int, Int>,
+    angle: Int,
+    nextCheckpointId: Int,
+    shieldCooldown: Int = 0
+) : MyPod(position, velocity, angle, nextCheckpointId, shieldCooldown) {
+
+    override fun calculateTarget(checkpoints: List<Checkpoint>, checkpointCount: Int) {
+        // For blocker, just aim at the current checkpoint
+        val currentCheckpoint = checkpoints[nextCheckpointId]
+        targetX = currentCheckpoint.position.x
+        targetY = currentCheckpoint.position.y
+    }
+
+    override fun calculateThrust(checkpoints: List<Checkpoint>, turn: Int, opponentPods: List<OpponentPod>, sharedBoostAvailable: Boolean) {
+        // This is a default implementation that will be overridden by calculateBlockerTarget
+        val currentCheckpoint = checkpoints[nextCheckpointId]
+        val angleDiff = Math.abs(angleToCheckpoint(currentCheckpoint))
+
+        // Reset flags
+        useShield = false
+        useBoost = false
+
+        // Determine thrust based on angle
+        thrust = when {
+            angleDiff > 90 -> 0
+            angleDiff > 50 -> 50
+            else -> 100
+        }
+
+        // Decide whether to use shield - use collision prediction
+        useShield = shouldActivateShield(opponentPods)
+
+        // Log inertia information for debugging
+        logInertiaInfo("BLOCKER")
+    }
+
+    fun calculateBlockerTarget(leadingOpponent: OpponentPod, checkpoints: List<Checkpoint>, blockOpponent: Boolean) {
+        if (blockOpponent) {
+            // Aim to intercept the leading opponent - use direct coordinates
+            targetX = leadingOpponent.posX + leadingOpponent.velocity.first
+            targetY = leadingOpponent.posY + leadingOpponent.velocity.second
+            thrust = 100
+
+            // For blocker pod, check for imminent collision with the target opponent
+            // and activate shield preemptively if we're on an intercept course
+            val distanceToOpponent = Point.distanceBetween(posX, posY, leadingOpponent.posX, leadingOpponent.posY)
+
+            // If we're close to the opponent and shield is available
+            if (shieldCooldown == 0 && distanceToOpponent < 1200) {
+                // Calculate time to collision more precisely for blocking
+                val (collisionTime, probability) = predictCollision(leadingOpponent)
+
+                // If collision is very likely and we're moving fast toward the opponent
+                if (collisionTime < 2 && probability > 0.5) {
+                    val relativeSpeed = sqrt(
+                        Math.pow((velocity.first - leadingOpponent.velocity.first).toDouble(), 2.0) +
+                        Math.pow((velocity.second - leadingOpponent.velocity.second).toDouble(), 2.0)
+                    )
+
+                    // Be more aggressive with shield usage when actively blocking
+                    if (relativeSpeed > 200) {
+                        useShield = true
+                        System.err.println("BLOCKER: Shield activated for interception! Collision in $collisionTime turns, speed: $relativeSpeed")
+                    }
+                }
+            }
+        } else {
+            // Race normally - use direct coordinates
+            val currentCheckpoint = checkpoints[nextCheckpointId]
+            targetX = currentCheckpoint.position.x
+            targetY = currentCheckpoint.position.y
+
+            val angleDiff = Math.abs(angleToCheckpoint(currentCheckpoint))
+            thrust = when {
+                angleDiff > 90 -> 0
+                angleDiff > 50 -> 50
+                else -> 100
+            }
+        }
+
+        // Log inertia information for debugging
+        logInertiaInfo("BLOCKER")
     }
 }
 
@@ -359,8 +536,8 @@ fun main(args : Array<String>) {
     val initialVelocity = Pair(0, 0)
 
     val myPods = mutableListOf<MyPod>(
-        MyPod(initialPoint, initialVelocity, 0, 0, 0, PodRole.RACER),
-        MyPod(initialPoint, initialVelocity, 0, 0, 0, PodRole.BLOCKER)
+        RacerPod(initialPoint, initialVelocity, 0, 0, 0),
+        BlockerPod(initialPoint, initialVelocity, 0, 0, 0)
     )
 
     val opponentPods = mutableListOf<OpponentPod>(
@@ -429,7 +606,7 @@ fun main(args : Array<String>) {
         System.err.println("Targeting opponent $leadingOpponentIndex: CP $opponentProgress")
 
         // Strategy for first pod (Racer)
-        val racerPod = myPods[0]
+        val racerPod = myPods[0] as RacerPod
 
         // Apply current test inertia value
         racerPod.testInertiaValue = currentTestInertia
@@ -444,7 +621,7 @@ fun main(args : Array<String>) {
         }
 
         // Strategy for second pod (Blocker/Interceptor)
-        val blockerPod = myPods[1]
+        val blockerPod = myPods[1] as BlockerPod
 
         // Apply current test inertia value
         blockerPod.testInertiaValue = currentTestInertia
