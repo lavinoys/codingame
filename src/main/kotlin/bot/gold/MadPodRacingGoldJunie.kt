@@ -482,12 +482,6 @@ fun main(args : Array<String>) {
     var boostAvailable = true
     var turn = 0
 
-    // Using the best inertia value (0.85) as determined by testing
-    var currentTestInertia = 0.85 // Fixed to the best value
-
-    // Performance metrics for the fixed inertia value
-    val inertiaPerformance = mutableMapOf<Double, MutableList<Double>>()
-    inertiaPerformance[currentTestInertia] = mutableListOf()
 
     // game loop
     while (true) {
@@ -529,8 +523,6 @@ fun main(args : Array<String>) {
         // Strategy for first pod (Racer)
         val racerPod = myPods[0] as RacerPod
 
-        // Apply current test inertia value
-        racerPod.testInertiaValue = currentTestInertia
 
         // Calculate target and thrust for racer pod
         racerPod.calculateTarget(checkpoints, checkpointCount)
@@ -544,8 +536,6 @@ fun main(args : Array<String>) {
         // Strategy for second pod (Blocker/Interceptor)
         val blockerPod = myPods[1] as BlockerPod
 
-        // Apply current test inertia value
-        blockerPod.testInertiaValue = currentTestInertia
 
         // Always block the opponent with highest progress
         val blockOpponent = true
@@ -553,24 +543,6 @@ fun main(args : Array<String>) {
         // Calculate target and thrust for blocker pod
         blockerPod.calculateBlockerTarget(leadingOpponent, checkpoints, blockOpponent)
 
-        // Record performance metrics for the fixed inertia value (0.85)
-        val racerSpeed = sqrt(racerPod.velocity.first.toDouble().pow(2) + racerPod.velocity.second.toDouble().pow(2))
-        val racerDistanceToCheckpoint = racerPod.distanceToCheckpoint(checkpoints[racerPod.nextCheckpointId])
-        val racerPerformanceScore = racerSpeed / (racerDistanceToCheckpoint + 1.0) * 1000 // Higher is better
-
-        inertiaPerformance[currentTestInertia]?.add(racerPerformanceScore)
-
-        // Output performance summary every 10 turns
-        if (turn % 10 == 0) {
-            System.err.println("===== PERFORMANCE SUMMARY =====")
-            val scores = inertiaPerformance[currentTestInertia]
-            if (scores != null && scores.isNotEmpty()) {
-                val avgScore = scores.average()
-                System.err.println("Using fixed inertia value: 0.85")
-                System.err.println("Average Score = $avgScore (${scores.size} samples)")
-            }
-            System.err.println("===============================")
-        }
 
         // Output commands for both pods
         println(racerPod.getCommand())
