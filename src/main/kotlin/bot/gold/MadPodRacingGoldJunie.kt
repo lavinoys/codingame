@@ -612,12 +612,26 @@ class BlockerPod(
     // BlockerPod uses the default implementations of calculateTarget and calculateThrust from MyPod
     // The actual blocking logic is implemented in calculateBlockerTarget
 
-    fun calculateBlockerTarget(leadingOpponent: OpponentPod, racerPod: RacerPod) {
+    fun calculateBlockerTarget(leadingOpponent: OpponentPod, racerPod: RacerPod, checkpoints: List<Checkpoint>, checkpointCount: Int) {
         // Reset flags
         if (shieldActive == 0) {  // Only reset if shield is not active
             useShield = false
         }
         useBoost = false
+
+        // Special case: If there are 4 or fewer checkpoints, target the second checkpoint
+        if (checkpointCount <= 4) {
+            // Get the second checkpoint (index 1)
+            val secondCheckpointIndex = 1 % checkpointCount  // Use modulo to handle case where there are fewer than 2 checkpoints
+            val secondCheckpoint = checkpoints[secondCheckpointIndex]
+
+            targetX = secondCheckpoint.position.x
+            targetY = secondCheckpoint.position.y
+            thrust = 100
+
+            System.err.println("BLOCKER: Targeting second checkpoint due to small track (checkpointCount=$checkpointCount)")
+            return
+        }
 
         // First rule: Check if we're going to interfere with our racer pod
         val (collisionTimeWithRacer, probabilityWithRacer) = predictCollision(racerPod)
@@ -793,7 +807,7 @@ fun main() {
         val blockerPod = myPods[1] as BlockerPod
 
         // BlockerPod only focuses on blocking opponents, not checkpoint racing
-        blockerPod.calculateBlockerTarget(leadingOpponent, racerPod)
+        blockerPod.calculateBlockerTarget(leadingOpponent, racerPod, checkpoints, checkpointCount)
 
 
         // Output commands for both pods
