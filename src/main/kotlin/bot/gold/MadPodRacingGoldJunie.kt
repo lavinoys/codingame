@@ -13,6 +13,10 @@ data class Point(val x: Int, val y: Int) {
         fun distanceBetween(x1: Int, y1: Int, x2: Int, y2: Int): Double =
             sqrt((x1 - x2).toDouble().pow(2) + (y1 - y2).toDouble().pow(2))
 
+        // Squared distance for comparison purposes (optimization)
+        fun squaredDistanceBetween(x1: Int, y1: Int, x2: Int, y2: Int): Double =
+            (x1 - x2).toDouble().pow(2) + (y1 - y2).toDouble().pow(2)
+
         fun angleBetween(x1: Int, y1: Int, x2: Int, y2: Int): Double =
             atan2((y2 - y1).toDouble(), (x2 - x1).toDouble()) * 180 / PI
 
@@ -39,7 +43,7 @@ data class Point(val x: Int, val y: Int) {
 
         // Check if a point is inside a circle with center (cx, cy) and radius r
         fun isInsideCircle(x: Int, y: Int, cx: Int, cy: Int, r: Double): Boolean {
-            return distanceBetween(x, y, cx, cy) <= r
+            return squaredDistanceBetween(x, y, cx, cy) <= r * r
         }
     }
 }
@@ -66,6 +70,10 @@ open class BasePod(
 
     fun distanceToCheckpoint(checkpoint: Checkpoint): Double = 
         Point.distanceBetween(posX, posY, checkpoint.position.x, checkpoint.position.y)
+
+    // Squared distance for comparison purposes (optimization)
+    fun squaredDistanceToCheckpoint(checkpoint: Checkpoint): Double = 
+        Point.squaredDistanceBetween(posX, posY, checkpoint.position.x, checkpoint.position.y)
 
     fun angleToCheckpoint(checkpoint: Checkpoint): Double {
         val targetAngle = Point.angleBetween(posX, posY, checkpoint.position.x, checkpoint.position.y)
@@ -241,7 +249,8 @@ abstract class MyPod(
 
             // Log collision prediction data for debugging
             if (collisionTime < 5) {  // Only log if collision is within 5 turns
-                val distance = Point.distanceBetween(posX, posY, opponentPod.posX, opponentPod.posY)
+                val squaredDistance = Point.squaredDistanceBetween(posX, posY, opponentPod.posX, opponentPod.posY)
+                val distance = sqrt(squaredDistance)  // Only calculate actual distance for logging
                 val relativeSpeed = getRelativeSpeed(opponentPod)
                 val dynamicRadius = collisionRadius + (relativeSpeed * 0.5).toInt().coerceAtMost(POD_SIZE.toInt())
                 System.err.println("Collision prediction: Time=$collisionTime, Prob=$probability, Dist=$distance, RelSpeed=$relativeSpeed, Radius=$dynamicRadius")
@@ -416,18 +425,18 @@ class RacerPod(
 
         // Optimize trajectory using closestPointToLine if we're moving fast enough
         val angleDiff = Math.abs(angleToCheckpoint(currentCheckpoint))
-        val futureDistance = Point.distanceBetween(
+        val futureDistanceSquared = Point.squaredDistanceBetween(
             futurePos.x, futurePos.y, 
             currentCheckpoint.position.x, currentCheckpoint.position.y
         )
-        val currentDistance = Point.distanceBetween(
+        val currentDistanceSquared = Point.squaredDistanceBetween(
             posX, posY, 
             currentCheckpoint.position.x, currentCheckpoint.position.y
         )
 
         if (distanceTravelledOnPreviousFrame > 50 && 
             angleDiff < 70 && 
-            futureDistance < currentDistance) {
+            futureDistanceSquared < currentDistanceSquared) {
 
             // Use closestPointToLine to optimize trajectory
             val currentPos = Point(posX, posY)
@@ -444,7 +453,8 @@ class RacerPod(
         }
 
         // Default behavior - use inertia correction to aim ahead of the checkpoint
-        if (distance < 1200) {
+        val squaredDistance = squaredDistanceToCheckpoint(currentCheckpoint)
+        if (squaredDistance < 1440000) { // 1200^2 = 1440000
             // If close to checkpoint, aim for the next one with inertia correction
             val nextCheckpointX = nextCheckpoint.position.x
             val nextCheckpointY = nextCheckpoint.position.y
@@ -493,11 +503,13 @@ class RacerPod(
         val angleBetweenCheckpoints = Math.toDegrees(acos(clampedCosAngle))
 
         // If the angle is large (> 90 degrees) and we're close to the current checkpoint, it's a hairpin
-        val distance = distanceToCheckpoint(currentCheckpoint)
-        val isCloseToCheckpoint = distance < 2000
+        val squaredDistance = squaredDistanceToCheckpoint(currentCheckpoint)
+        val isCloseToCheckpoint = squaredDistance < 4000000 // 2000^2 = 4000000
         val isLargeAngle = angleBetweenCheckpoints > 90
 
         if (isLargeAngle && isCloseToCheckpoint) {
+            // For logging, get the actual distance
+            val distance = sqrt(squaredDistance)
             System.err.println("Detected hairpin turn! Angle between checkpoints: $angleBetweenCheckpoints, Distance: $distance")
             return true
         }
@@ -507,7 +519,7 @@ class RacerPod(
 
     override fun calculateThrust(checkpoints: List<Checkpoint>, turn: Int, opponentPods: List<OpponentPod>, sharedBoostAvailable: Boolean) {
         val currentCheckpoint = checkpoints[nextCheckpointId]
-        val distance = distanceToCheckpoint(currentCheckpoint)
+        val squaredDistance = squaredDistanceToCheckpoint(currentCheckpoint)
         val angleDiff = Math.abs(angleToCheckpoint(currentCheckpoint))
 
         // Reset flags
@@ -543,7 +555,7 @@ class RacerPod(
             val baseThrust = when {
                 angleDiff > 90 -> 0
                 angleDiff > 50 -> 50
-                distance < 1000 -> 70
+                squaredDistance < 1000000 -> 70 // 1000^2 = 1000000
                 else -> 100
             }
 
@@ -554,7 +566,7 @@ class RacerPod(
         // Decide whether to use boost - never use boost in hairpin turns
         if (sharedBoostAvailable && 
             angleDiff < 10 && 
-            distance > 5000 &&
+            squaredDistance > 25000000 && // 5000^2 = 25000000
             turn > 3 &&
             !isHairpin) {
             useBoost = true
@@ -623,11 +635,13 @@ class BlockerPod(
         val angleBetweenCheckpoints = Math.toDegrees(acos(clampedCosAngle))
 
         // If the angle is large (> 90 degrees) and we're close to the current checkpoint, it's a hairpin
-        val distance = distanceToCheckpoint(currentCheckpoint)
-        val isCloseToCheckpoint = distance < 2000
+        val squaredDistance = squaredDistanceToCheckpoint(currentCheckpoint)
+        val isCloseToCheckpoint = squaredDistance < 4000000 // 2000^2 = 4000000
         val isLargeAngle = angleBetweenCheckpoints > 90
 
         if (isLargeAngle && isCloseToCheckpoint) {
+            // For logging, get the actual distance
+            val distance = sqrt(squaredDistance)
             System.err.println("BlockerPod: Detected hairpin turn! Angle between checkpoints: $angleBetweenCheckpoints, Distance: $distance")
             return true
         }
@@ -640,7 +654,7 @@ class BlockerPod(
         val currentCheckpoint = checkpoints[nextCheckpointId]
         val nextCheckpointIndex = (nextCheckpointId + 1) % checkpointCount
         val nextCheckpoint = checkpoints[nextCheckpointIndex]
-        val distance = distanceToCheckpoint(currentCheckpoint)
+        val squaredDistance = squaredDistanceToCheckpoint(currentCheckpoint)
 
         // Check if we're going for the home run (final lap, final checkpoint)
         val isGoingForHomeRun = this.checkpointCount == (checkpointCount * 3)
@@ -675,18 +689,18 @@ class BlockerPod(
 
         // Optimize trajectory using closestPointToLine if we're moving fast enough
         val angleDiff = Math.abs(angleToCheckpoint(currentCheckpoint))
-        val futureDistance = Point.distanceBetween(
+        val futureDistanceSquared = Point.squaredDistanceBetween(
             futurePos.x, futurePos.y, 
             currentCheckpoint.position.x, currentCheckpoint.position.y
         )
-        val currentDistance = Point.distanceBetween(
+        val currentDistanceSquared = Point.squaredDistanceBetween(
             posX, posY, 
             currentCheckpoint.position.x, currentCheckpoint.position.y
         )
 
         if (distanceTravelledOnPreviousFrame > 50 && 
             angleDiff < 70 && 
-            futureDistance < currentDistance) {
+            futureDistanceSquared < currentDistanceSquared) {
 
             // Use closestPointToLine to optimize trajectory
             val currentPos = Point(posX, posY)
@@ -703,7 +717,7 @@ class BlockerPod(
         }
 
         // Default behavior - use inertia correction to aim ahead of the checkpoint
-        if (distance < 1200) {
+        if (squaredDistance < 1440000) { // 1200^2 = 1440000
             // If close to checkpoint, aim for the next one with inertia correction
             val nextCheckpointX = nextCheckpoint.position.x
             val nextCheckpointY = nextCheckpoint.position.y
@@ -763,10 +777,10 @@ class BlockerPod(
         else {
             // First rule: Check if we're going to interfere with our racer pod
             val (collisionTimeWithRacer, probabilityWithRacer) = predictCollision(racerPod)
-            val distanceToRacer = Point.distanceBetween(posX, posY, racerPod.posX, racerPod.posY)
+            val distanceToRacerSquared = Point.squaredDistanceBetween(posX, posY, racerPod.posX, racerPod.posY)
 
             // If we're likely to collide with our racer pod, avoid it
-            if (collisionTimeWithRacer < 3 && probabilityWithRacer > 0.5 && distanceToRacer < 2000) {
+            if (collisionTimeWithRacer < 3 && probabilityWithRacer > 0.5 && distanceToRacerSquared < 4000000) { // 2000^2 = 4000000
                 System.err.println("BLOCKER: Avoiding collision with racer pod! Time=$collisionTimeWithRacer, Prob=$probabilityWithRacer")
 
                 // Calculate a target that avoids the racer pod
@@ -800,10 +814,10 @@ class BlockerPod(
 
         // For blocker pod, check for imminent collision with the target opponent
         // and activate shield preemptively if we're on an intercept course
-        val distanceToOpponent = Point.distanceBetween(posX, posY, leadingOpponent.posX, leadingOpponent.posY)
+        val distanceToOpponentSquared = Point.squaredDistanceBetween(posX, posY, leadingOpponent.posX, leadingOpponent.posY)
 
         // If we're close to the opponent and shield is available
-        if (shieldCooldown == 0 && distanceToOpponent < 1200) {
+        if (shieldCooldown == 0 && distanceToOpponentSquared < 1440000) { // 1200^2 = 1440000
             // Calculate time to collision more precisely for blocking
             val (collisionTime, probability) = predictCollision(leadingOpponent)
 
