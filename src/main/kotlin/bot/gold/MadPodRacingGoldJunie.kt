@@ -22,22 +22,22 @@ data class Point(val x: Int, val y: Int) {
 
         // Calculate the closest point on a line (defined by points a and b) to point p
         fun closestPointToLine(a: Point, b: Point, p: Point): Point {
-            val aToP = Point(p.x - a.x, p.y - a.y)
-            val aToB = Point(b.x - a.x, b.y - a.y)
+            val vectorAtoP = Point(p.x - a.x, p.y - a.y)
+            val vectorAtoB = Point(b.x - a.x, b.y - a.y)
 
-            val atb2 = distanceBetween(a.x, a.y, b.x, b.y)
-            val atb2Squared = atb2 * atb2
+            val distanceAtoB = distanceBetween(a.x, a.y, b.x, b.y)
+            val distanceAtoBSquared = distanceAtoB * distanceAtoB
 
-            if (atb2Squared < 0.0001) {
+            if (distanceAtoBSquared < 0.0001) {
                 return p
             }
 
-            val atpDotAtb = aToP.x * aToB.x + aToP.y * aToB.y
-            val t = atpDotAtb / atb2Squared
+            val dotProduct = vectorAtoP.x * vectorAtoB.x + vectorAtoP.y * vectorAtoB.y
+            val t = dotProduct / distanceAtoBSquared
 
             return Point(
-                (a.x + aToB.x * t).toInt(),
-                (a.y + aToB.y * t).toInt()
+                (a.x + vectorAtoB.x * t).toInt(),
+                (a.y + vectorAtoB.y * t).toInt()
             )
         }
 
@@ -53,13 +53,26 @@ data class Checkpoint(val position: Point, val id: Int)
 // Base Pod class with common functionality
 open class BasePod(
     var position: Point,
-    var velocity: Pair<Int, Int>,
+    velocityPair: Pair<Int, Int>,
     var angle: Int,
     var nextCheckpointId: Int
 ) {
     // Store position coordinates directly to avoid creating Point objects
     var posX: Int = position.x
     var posY: Int = position.y
+
+    // Store velocity components directly to avoid creating Pair objects
+    var velocityX: Int = velocityPair.first
+    var velocityY: Int = velocityPair.second
+
+    // Keep velocity as Pair for backward compatibility
+    var velocity: Pair<Int, Int> = velocityPair
+        get() = Pair(velocityX, velocityY)
+        set(value) {
+            field = value
+            velocityX = value.first
+            velocityY = value.second
+        }
 
     // Constants
     companion object {
@@ -80,39 +93,37 @@ open class BasePod(
 
     // Calculate current speed
     fun getCurrentSpeed(): Double = 
-        sqrt(velocity.first.toDouble().pow(2) + velocity.second.toDouble().pow(2))
+        sqrt(velocityX.toDouble().pow(2) + velocityY.toDouble().pow(2))
 
     // Calculate relative speed between this pod and another pod
     fun getRelativeSpeed(otherPod: BasePod): Double = 
         sqrt(
-            Math.pow((velocity.first - otherPod.velocity.first).toDouble(), 2.0) +
-            Math.pow((velocity.second - otherPod.velocity.second).toDouble(), 2.0)
+            Math.pow((velocityX - otherPod.velocityX).toDouble(), 2.0) +
+            Math.pow((velocityY - otherPod.velocityY).toDouble(), 2.0)
         )
 
     // Predict if the pod will enter a checkpoint in the next few turns
     fun isGoingToEnterCheckpointSoon(checkpoints: List<Checkpoint>): Boolean {
         val currentCheckpoint = checkpoints[nextCheckpointId]
-        var velocity = Pair(this.velocity.first, this.velocity.second)
-        var approxPosition = Point(posX, posY)
+        var velocityX = this.velocityX
+        var velocityY = this.velocityY
+        var approxPositionX = posX
+        var approxPositionY = posY
 
         // Simulate movement for the next 6 turns
-        (0 until 6).forEach { _ ->
+        repeat(6) {
             // Apply friction to velocity
-            velocity = Pair(
-                (velocity.first * FRICTION).toInt(),
-                (velocity.second * FRICTION).toInt()
-            )
+            velocityX = (velocityX * FRICTION).toInt()
+            velocityY = (velocityY * FRICTION).toInt()
 
             // Update position based on velocity
-            approxPosition = Point(
-                approxPosition.x + velocity.first,
-                approxPosition.y + velocity.second
-            )
+            approxPositionX += velocityX
+            approxPositionY += velocityY
 
             // Check if pod is inside checkpoint
             if (Point.isInsideCircle(
-                    approxPosition.x,
-                    approxPosition.y,
+                    approxPositionX,
+                    approxPositionY,
                     currentCheckpoint.position.x,
                     currentCheckpoint.position.y,
                     CHECKPOINT_RADIUS
@@ -130,6 +141,10 @@ open class BasePod(
         posY = y
         // Update Point object only once
         position = Point(x, y)
+        // Update velocity components directly
+        velocityX = vx
+        velocityY = vy
+        // Update velocity Pair for backward compatibility
         velocity = Pair(vx, vy)
         this.angle = angle
         this.nextCheckpointId = nextCheckpointId
@@ -157,6 +172,107 @@ abstract class MyPod(
     val collisionRadius = POD_SIZE.toInt() // Radius to consider for collision
     val collisionTimeThreshold = 3 // Number of turns to look ahead for collision prediction
     val collisionProbabilityThreshold = 0.7 // Probability threshold to activate shield
+
+    // Constants for trajectory optimization
+    companion object {
+        const val MIN_DISTANCE_FOR_OPTIMIZATION = 50.0
+        const val MAX_ANGLE_FOR_OPTIMIZATION = 70.0
+    }
+
+    // Optimize trajectory using closestPointToLine if conditions are met
+    protected fun optimizeTrajectory(checkpoint: Checkpoint, podType: String): Boolean {
+        // Calculate position delta and future position
+        val deltaX = (velocityX * FRICTION).toInt()
+        val deltaY = (velocityY * FRICTION).toInt()
+
+        val distanceTravelledOnPreviousFrame = sqrt(
+            deltaX.toDouble().pow(2) + 
+            deltaY.toDouble().pow(2)
+        )
+
+        val futurePositionX = posX + deltaX
+        val futurePositionY = posY + deltaY
+
+        // Calculate angle to checkpoint
+        val angleDiff = Math.abs(angleToCheckpoint(checkpoint))
+
+        // Calculate distances
+        val futureDistanceSquared = Point.squaredDistanceBetween(
+            futurePositionX, futurePositionY, 
+            checkpoint.position.x, checkpoint.position.y
+        )
+        val currentDistanceSquared = Point.squaredDistanceBetween(
+            posX, posY, 
+            checkpoint.position.x, checkpoint.position.y
+        )
+
+        // Check if we should optimize trajectory
+        if (distanceTravelledOnPreviousFrame > MIN_DISTANCE_FOR_OPTIMIZATION && 
+            angleDiff < MAX_ANGLE_FOR_OPTIMIZATION && 
+            futureDistanceSquared < currentDistanceSquared) {
+
+            // We need to create Point objects for the closestPointToLine calculation
+            // since it's a complex geometric operation
+            val currentPosition = Point(posX, posY)
+            val futurePosition = Point(futurePositionX, futurePositionY)
+            val closestPoint = Point.closestPointToLine(currentPosition, checkpoint.position, futurePosition)
+
+            // Calculate target point directly without creating an intermediate Point object
+            targetX = closestPoint.x + (closestPoint.x - futurePositionX)
+            targetY = closestPoint.y + (closestPoint.y - futurePositionY)
+
+            System.err.println("$podType: Optimizing trajectory using closestPointToLine")
+            return true
+        }
+
+        return false
+    }
+
+    // Detect if we're approaching a hairpin turn
+    protected fun isHairpinTurn(checkpoints: List<Checkpoint>, checkpointCount: Int): Boolean {
+        val currentCheckpoint = checkpoints[nextCheckpointId]
+        val nextCheckpointIndex = (nextCheckpointId + 1) % checkpointCount
+        val nextCheckpoint = checkpoints[nextCheckpointIndex]
+
+        // Calculate the angle between current checkpoint and next checkpoint
+        val vectorToCurrent = Point(
+            currentCheckpoint.position.x - posX,
+            currentCheckpoint.position.y - posY
+        )
+        val vectorToNext = Point(
+            nextCheckpoint.position.x - currentCheckpoint.position.x,
+            nextCheckpoint.position.y - currentCheckpoint.position.y
+        )
+
+        // Calculate the angle between these vectors
+        val dotProduct = vectorToCurrent.x * vectorToNext.x + vectorToCurrent.y * vectorToNext.y
+        val magnitudeCurrent = sqrt(vectorToCurrent.x.toDouble().pow(2) + vectorToCurrent.y.toDouble().pow(2))
+        val magnitudeNext = sqrt(vectorToNext.x.toDouble().pow(2) + vectorToNext.y.toDouble().pow(2))
+
+        // Avoid division by zero
+        if (magnitudeCurrent < 0.001 || magnitudeNext < 0.001) {
+            return false
+        }
+
+        val cosAngle = dotProduct / (magnitudeCurrent * magnitudeNext)
+        // Clamp to avoid domain errors with acos
+        val clampedCosAngle = cosAngle.coerceIn(-1.0, 1.0)
+        val angleBetweenCheckpoints = Math.toDegrees(acos(clampedCosAngle))
+
+        // If the angle is large (> 90 degrees) and we're close to the current checkpoint, it's a hairpin
+        val squaredDistance = squaredDistanceToCheckpoint(currentCheckpoint)
+        val isCloseToCheckpoint = squaredDistance < 4000000 // 2000^2 = 4000000
+        val isLargeAngle = angleBetweenCheckpoints > 90
+
+        if (isLargeAngle && isCloseToCheckpoint) {
+            // For logging, get the actual distance
+            val distance = sqrt(squaredDistance)
+            System.err.println("Detected hairpin turn! Angle between checkpoints: $angleBetweenCheckpoints, Distance: $distance")
+            return true
+        }
+
+        return false
+    }
 
     override fun update(x: Int, y: Int, vx: Int, vy: Int, angle: Int, nextCheckpointId: Int) {
         super.update(x, y, vx, vy, angle, nextCheckpointId)
@@ -317,7 +433,7 @@ abstract class MyPod(
         val currentSpeed = getCurrentSpeed()
 
         // Calculate the dot product to determine if we're moving in the right direction
-        val dotProduct = velocity.first * cos(targetAngle) + velocity.second * sin(targetAngle)
+        val dotProduct = velocityX * cos(targetAngle) + velocityY * sin(targetAngle)
         val movingTowardsTarget = dotProduct > 0
 
         // Adjust thrust based on inertia and current movement
@@ -342,7 +458,7 @@ abstract class MyPod(
 
         System.err.println("Pod $podType - " +
                 "Speed: $speed, " +
-                "Velocity: (${velocity.first}, ${velocity.second}), " +
+                "Velocity: (${velocityX}, ${velocityY}), " +
                 "Thrust: $thrust")
     }
 
@@ -417,45 +533,13 @@ class RacerPod(
             return
         }
 
-        // Calculate position delta and future position
-        val positionDelta = Pair(
-            (velocity.first * FRICTION).toInt(),
-            (velocity.second * FRICTION).toInt()
-        )
-        val distanceTravelledOnPreviousFrame = sqrt(
-            positionDelta.first.toDouble().pow(2) + 
-            positionDelta.second.toDouble().pow(2)
-        )
-        val futurePos = Point(posX + positionDelta.first, posY + positionDelta.second)
-
-        // Optimize trajectory using closestPointToLine if we're moving fast enough
-        val angleDiff = Math.abs(angleToCheckpoint(currentCheckpoint))
-        val futureDistanceSquared = Point.squaredDistanceBetween(
-            futurePos.x, futurePos.y, 
-            currentCheckpoint.position.x, currentCheckpoint.position.y
-        )
-        val currentDistanceSquared = Point.squaredDistanceBetween(
-            posX, posY, 
-            currentCheckpoint.position.x, currentCheckpoint.position.y
-        )
-
-        if (distanceTravelledOnPreviousFrame > 50 && 
-            angleDiff < 70 && 
-            futureDistanceSquared < currentDistanceSquared) {
-
-            // Use closestPointToLine to optimize trajectory
-            val currentPos = Point(posX, posY)
-            val aux = Point.closestPointToLine(currentPos, currentCheckpoint.position, futurePos)
-            val aux2 = Point(
-                aux.x + (aux.x - futurePos.x),
-                aux.y + (aux.y - futurePos.y)
-            )
-
-            targetX = aux2.x
-            targetY = aux2.y
-            System.err.println("RacerPod: Optimizing trajectory using closestPointToLine")
+        // Try to optimize trajectory using the shared method
+        if (optimizeTrajectory(currentCheckpoint, "RacerPod")) {
             return
         }
+
+        // Calculate angle for later use
+        val angleDiff = Math.abs(angleToCheckpoint(currentCheckpoint))
 
         // Default behavior - use inertia correction to aim ahead of the checkpoint
         val squaredDistance = squaredDistanceToCheckpoint(currentCheckpoint)
@@ -476,50 +560,15 @@ class RacerPod(
         }
     }
 
-    // Detect if we're approaching a hairpin turn
-    private fun isHairpinTurn(checkpoints: List<Checkpoint>, checkpointCount: Int): Boolean {
-        val currentCheckpoint = checkpoints[nextCheckpointId]
-        val nextCheckpointIndex = (nextCheckpointId + 1) % checkpointCount
-        val nextCheckpoint = checkpoints[nextCheckpointIndex]
+    // Using isHairpinTurn from parent class
 
-        // Calculate the angle between current checkpoint and next checkpoint
-        val vectorToCurrent = Point(
-            currentCheckpoint.position.x - posX,
-            currentCheckpoint.position.y - posY
-        )
-        val vectorToNext = Point(
-            nextCheckpoint.position.x - currentCheckpoint.position.x,
-            nextCheckpoint.position.y - currentCheckpoint.position.y
-        )
+    // Combined strategy method that handles both targeting and thrust calculation
+    fun calculateRacerStrategy(checkpoints: List<Checkpoint>, checkpointCount: Int, turn: Int, opponentPods: List<OpponentPod>, sharedBoostAvailable: Boolean) {
+        // First calculate the target
+        calculateTarget(checkpoints, checkpointCount)
 
-        // Calculate the angle between these vectors
-        val dotProduct = vectorToCurrent.x * vectorToNext.x + vectorToCurrent.y * vectorToNext.y
-        val magnitudeCurrent = sqrt(vectorToCurrent.x.toDouble().pow(2) + vectorToCurrent.y.toDouble().pow(2))
-        val magnitudeNext = sqrt(vectorToNext.x.toDouble().pow(2) + vectorToNext.y.toDouble().pow(2))
-
-        // Avoid division by zero
-        if (magnitudeCurrent < 0.001 || magnitudeNext < 0.001) {
-            return false
-        }
-
-        val cosAngle = dotProduct / (magnitudeCurrent * magnitudeNext)
-        // Clamp to avoid domain errors with acos
-        val clampedCosAngle = cosAngle.coerceIn(-1.0, 1.0)
-        val angleBetweenCheckpoints = Math.toDegrees(acos(clampedCosAngle))
-
-        // If the angle is large (> 90 degrees) and we're close to the current checkpoint, it's a hairpin
-        val squaredDistance = squaredDistanceToCheckpoint(currentCheckpoint)
-        val isCloseToCheckpoint = squaredDistance < 4000000 // 2000^2 = 4000000
-        val isLargeAngle = angleBetweenCheckpoints > 90
-
-        if (isLargeAngle && isCloseToCheckpoint) {
-            // For logging, get the actual distance
-            val distance = sqrt(squaredDistance)
-            System.err.println("Detected hairpin turn! Angle between checkpoints: $angleBetweenCheckpoints, Distance: $distance")
-            return true
-        }
-
-        return false
+        // Then calculate the thrust
+        calculateThrust(checkpoints, turn, opponentPods, sharedBoostAvailable)
     }
 
     override fun calculateThrust(checkpoints: List<Checkpoint>, turn: Int, opponentPods: List<OpponentPod>, sharedBoostAvailable: Boolean) {
@@ -627,51 +676,7 @@ class BlockerPod(
                abs(posY - checkpoint.position.y) <= tolerance
     }
 
-    // Detect if we're approaching a hairpin turn
-    private fun isHairpinTurn(checkpoints: List<Checkpoint>, checkpointCount: Int): Boolean {
-        val currentCheckpoint = checkpoints[nextCheckpointId]
-        val nextCheckpointIndex = (nextCheckpointId + 1) % checkpointCount
-        val nextCheckpoint = checkpoints[nextCheckpointIndex]
-
-        // Calculate the angle between current checkpoint and next checkpoint
-        val vectorToCurrent = Point(
-            currentCheckpoint.position.x - posX,
-            currentCheckpoint.position.y - posY
-        )
-        val vectorToNext = Point(
-            nextCheckpoint.position.x - currentCheckpoint.position.x,
-            nextCheckpoint.position.y - currentCheckpoint.position.y
-        )
-
-        // Calculate the angle between these vectors
-        val dotProduct = vectorToCurrent.x * vectorToNext.x + vectorToCurrent.y * vectorToNext.y
-        val magnitudeCurrent = sqrt(vectorToCurrent.x.toDouble().pow(2) + vectorToCurrent.y.toDouble().pow(2))
-        val magnitudeNext = sqrt(vectorToNext.x.toDouble().pow(2) + vectorToNext.y.toDouble().pow(2))
-
-        // Avoid division by zero
-        if (magnitudeCurrent < 0.001 || magnitudeNext < 0.001) {
-            return false
-        }
-
-        val cosAngle = dotProduct / (magnitudeCurrent * magnitudeNext)
-        // Clamp to avoid domain errors with acos
-        val clampedCosAngle = cosAngle.coerceIn(-1.0, 1.0)
-        val angleBetweenCheckpoints = Math.toDegrees(acos(clampedCosAngle))
-
-        // If the angle is large (> 90 degrees) and we're close to the current checkpoint, it's a hairpin
-        val squaredDistance = squaredDistanceToCheckpoint(currentCheckpoint)
-        val isCloseToCheckpoint = squaredDistance < 4000000 // 2000^2 = 4000000
-        val isLargeAngle = angleBetweenCheckpoints > 90
-
-        if (isLargeAngle && isCloseToCheckpoint) {
-            // For logging, get the actual distance
-            val distance = sqrt(squaredDistance)
-            System.err.println("BLOCKER: Detected hairpin turn! Angle between checkpoints: $angleBetweenCheckpoints, Distance: $distance")
-            return true
-        }
-
-        return false
-    }
+    // Using isHairpinTurn from parent class
 
     // Function to handle the logic for targeting the second checkpoint when there are 4 or fewer checkpoints
     private fun targetSecondCheckpoint(checkpoints: List<Checkpoint>, checkpointCount: Int) {
@@ -712,17 +717,6 @@ class BlockerPod(
             return
         }
 
-        // Calculate position delta and future position
-        val positionDelta = Pair(
-            (velocity.first * FRICTION).toInt(),
-            (velocity.second * FRICTION).toInt()
-        )
-        val distanceTravelledOnPreviousFrame = sqrt(
-            positionDelta.first.toDouble().pow(2) + 
-            positionDelta.second.toDouble().pow(2)
-        )
-        val futurePos = Point(posX + positionDelta.first, posY + positionDelta.second)
-
         // Calculate the current speed
         val currentSpeed = getCurrentSpeed()
 
@@ -733,33 +727,9 @@ class BlockerPod(
         // Calculate the angle to the checkpoint
         val angleDiff = Math.abs(angleToCheckpoint(secondCheckpoint))
 
-        // Optimize trajectory using closestPointToLine if we're moving fast enough
-        val futureDistanceSquared = Point.squaredDistanceBetween(
-            futurePos.x, futurePos.y, 
-            secondCheckpoint.position.x, secondCheckpoint.position.y
-        )
-        val currentDistanceSquared = Point.squaredDistanceBetween(
-            posX, posY, 
-            secondCheckpoint.position.x, secondCheckpoint.position.y
-        )
-
-        if (distanceTravelledOnPreviousFrame > 50 && 
-            angleDiff < 70 && 
-            futureDistanceSquared < currentDistanceSquared) {
-
-            // Use closestPointToLine to optimize trajectory
-            val currentPos = Point(posX, posY)
-            val aux = Point.closestPointToLine(currentPos, secondCheckpoint.position, futurePos)
-            val aux2 = Point(
-                aux.x + (aux.x - futurePos.x),
-                aux.y + (aux.y - futurePos.y)
-            )
-
-            targetX = aux2.x
-            targetY = aux2.y
-            System.err.println("BLOCKER: Optimizing trajectory using closestPointToLine")
-        } else {
-            // Adjust target position based on inertia
+        // Try to optimize trajectory using the shared method
+        if (!optimizeTrajectory(secondCheckpoint, "BLOCKER")) {
+            // If trajectory optimization failed, adjust target position based on inertia
             val (adjustedX, adjustedY) = calculateInertiaAdjustedTarget(secondCheckpoint)
             targetX = adjustedX
             targetY = adjustedY
@@ -802,9 +772,9 @@ class BlockerPod(
     }
 
     // BlockerPod uses the default implementations of calculateTarget and calculateThrust from MyPod
-    // The actual blocking logic is implemented in calculateBlockerTarget
+    // The actual blocking logic is implemented in calculateBlockerStrategy
 
-    fun calculateBlockerTarget(leadingOpponent: OpponentPod, racerPod: RacerPod, checkpoints: List<Checkpoint>, checkpointCount: Int) {
+    fun calculateBlockerStrategy(leadingOpponent: OpponentPod, racerPod: RacerPod, checkpoints: List<Checkpoint>, checkpointCount: Int) {
         // Reset flags
         if (shieldActive == 0) {  // Only reset if shield is not active
             useShield = false
@@ -978,9 +948,8 @@ fun main() {
         val racerPod = myPods[0] as RacerPod
 
 
-        // Calculate target and thrust for racer pod
-        racerPod.calculateTarget(checkpoints, checkpointCount)
-        racerPod.calculateThrust(checkpoints, turn, opponentPods, boostAvailable)
+        // Calculate strategy for racer pod
+        racerPod.calculateRacerStrategy(checkpoints, checkpointCount, turn, opponentPods, boostAvailable)
 
         // If boost is used, update shared boost availability
         if (racerPod.useBoost) {
@@ -991,7 +960,7 @@ fun main() {
         val blockerPod = myPods[1] as BlockerPod
 
         // BlockerPod only focuses on blocking opponents, not checkpoint racing
-        blockerPod.calculateBlockerTarget(leadingOpponent, racerPod, checkpoints, checkpointCount)
+        blockerPod.calculateBlockerStrategy(leadingOpponent, racerPod, checkpoints, checkpointCount)
 
 
         // Output commands for both pods
