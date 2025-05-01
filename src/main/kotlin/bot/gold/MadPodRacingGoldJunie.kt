@@ -767,7 +767,7 @@ class BlockerPod(
     // BlockerPod uses the default implementations of calculateTarget and calculateThrust from MyPod
     // The actual blocking logic is implemented in calculateBlockerStrategy
 
-    fun calculateBlockerStrategy(leadingOpponent: OpponentPod, racerPod: RacerPod, checkpoints: List<Checkpoint>, checkpointCount: Int, opponentPods: List<OpponentPod> = listOf(leadingOpponent)) {
+    fun calculateBlockerStrategy(leadingOpponent: OpponentPod, racerPod: RacerPod) {
         // Reset flags
         if (shieldActive == 0) {  // Only reset if shield is not active
             useShield = false
@@ -948,7 +948,7 @@ fun main() {
         val blockerPod = myPods[1] as BlockerPod
 
         // BlockerPod only focuses on blocking opponents, not checkpoint racing
-        blockerPod.calculateBlockerStrategy(leadingOpponent, racerPod, checkpoints, checkpointCount, opponentPods)
+        blockerPod.calculateBlockerStrategy(leadingOpponent, racerPod)
 
 
         // Output commands for both pods
