@@ -356,7 +356,7 @@ abstract class MyPod(
 
     fun activateShield() {
         if (useShield && shieldActive == 0) {  // Only activate if not already active
-            shieldActive = 2  // Shield will be active for 2 turns
+            shieldActive = 3  // Shield will be active for 3 turns
             shieldCooldown = 3  // Cooldown after shield expires
         }
     }
