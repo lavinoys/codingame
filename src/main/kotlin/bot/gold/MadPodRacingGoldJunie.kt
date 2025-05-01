@@ -84,6 +84,7 @@ abstract class MyPod(
     var targetY: Int = 0
     var thrust: Int = 100
     var useShield: Boolean = false
+    var shieldActive: Int = 0  // Number of turns the shield is active
     var useBoost: Boolean = false
 
     // Fixed inertia value
@@ -100,6 +101,12 @@ abstract class MyPod(
         // Update shield cooldown
         if (shieldCooldown > 0) {
             shieldCooldown--
+        }
+
+        // Update shield active duration
+        if (shieldActive > 0) {
+            shieldActive--
+            useShield = true  // Keep shield active
         }
     }
 
@@ -262,8 +269,9 @@ abstract class MyPod(
     }
 
     fun activateShield() {
-        if (useShield) {
-            shieldCooldown = 3
+        if (useShield && shieldActive == 0) {  // Only activate if not already active
+            shieldActive = 2  // Shield will be active for 2 turns
+            shieldCooldown = 3  // Cooldown after shield expires
         }
     }
 }
@@ -307,7 +315,9 @@ class RacerPod(
         val angleDiff = Math.abs(angleToCheckpoint(currentCheckpoint))
 
         // Reset flags
-        useShield = false
+        if (shieldActive == 0) {  // Only reset if shield is not active
+            useShield = false
+        }
         useBoost = false
 
         // Determine base thrust based on angle and distance
@@ -359,7 +369,9 @@ class BlockerPod(
         val angleDiff = Math.abs(angleToCheckpoint(currentCheckpoint))
 
         // Reset flags
-        useShield = false
+        if (shieldActive == 0) {  // Only reset if shield is not active
+            useShield = false
+        }
         useBoost = false
 
         // Determine thrust based on angle
@@ -378,7 +390,9 @@ class BlockerPod(
 
     fun calculateBlockerTarget(leadingOpponent: OpponentPod, checkpoints: List<Checkpoint>, blockOpponent: Boolean) {
         // Reset flags
-        useShield = false
+        if (shieldActive == 0) {  // Only reset if shield is not active
+            useShield = false
+        }
         useBoost = false
 
         if (blockOpponent) {
