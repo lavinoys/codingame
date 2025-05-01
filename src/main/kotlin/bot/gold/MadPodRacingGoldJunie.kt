@@ -40,6 +40,17 @@ open class BasePod(
         return if (angleDiff > 180) angleDiff - 360 else angleDiff
     }
 
+    // Calculate current speed
+    fun getCurrentSpeed(): Double = 
+        sqrt(velocity.first.toDouble().pow(2) + velocity.second.toDouble().pow(2))
+
+    // Calculate relative speed between this pod and another pod
+    fun getRelativeSpeed(otherPod: BasePod): Double = 
+        sqrt(
+            Math.pow((velocity.first - otherPod.velocity.first).toDouble(), 2.0) +
+            Math.pow((velocity.second - otherPod.velocity.second).toDouble(), 2.0)
+        )
+
     open fun update(x: Int, y: Int, vx: Int, vy: Int, angle: Int, nextCheckpointId: Int) {
         // Update position coordinates directly
         posX = x
@@ -87,9 +98,6 @@ abstract class MyPod(
     var shieldActive: Int = 0  // Number of turns the shield is active
     var useBoost: Boolean = false
 
-    // Fixed inertia value
-    var testInertiaValue: Double = 0.85
-
     // Collision prediction parameters
     val collisionRadius = 400 // Radius to consider for collision (pod radius is 400)
     val collisionTimeThreshold = 3 // Number of turns to look ahead for collision prediction
@@ -119,10 +127,7 @@ abstract class MyPod(
         val relativeVY = opponentPod.velocity.second - velocity.second
 
         // Calculate relative speed
-        val relativeSpeed = sqrt(
-            relativeVX.toDouble() * relativeVX.toDouble() + 
-            relativeVY.toDouble() * relativeVY.toDouble()
-        )
+        val relativeSpeed = getRelativeSpeed(opponentPod)
 
         // Make collision radius dynamic based on relative speed
         // Higher speeds need larger collision radius to account for movement between turns
@@ -187,21 +192,15 @@ abstract class MyPod(
             // Log collision prediction data for debugging
             if (collisionTime < 5) {  // Only log if collision is within 5 turns
                 val distance = Point.distanceBetween(posX, posY, opponentPod.posX, opponentPod.posY)
-                val relativeSpeed = sqrt(
-                    Math.pow((velocity.first - opponentPod.velocity.first).toDouble(), 2.0) +
-                    Math.pow((velocity.second - opponentPod.velocity.second).toDouble(), 2.0)
-                )
+                val relativeSpeed = getRelativeSpeed(opponentPod)
                 val dynamicRadius = collisionRadius + (relativeSpeed * 0.5).toInt().coerceAtMost(400)
                 System.err.println("Collision prediction: Time=$collisionTime, Prob=$probability, Dist=$distance, RelSpeed=$relativeSpeed, Radius=$dynamicRadius")
             }
 
             // If collision is imminent and probable
             if (collisionTime < collisionTimeThreshold && probability > collisionProbabilityThreshold) {
-                // Calculate relative speed to determine impact force
-                val relativeSpeed = sqrt(
-                    Math.pow((velocity.first - opponentPod.velocity.first).toDouble(), 2.0) +
-                    Math.pow((velocity.second - opponentPod.velocity.second).toDouble(), 2.0)
-                )
+                // Get relative speed to determine impact force
+                val relativeSpeed = getRelativeSpeed(opponentPod)
 
                 // Only activate shield for high-impact collisions
                 if (relativeSpeed > 300) {
@@ -223,11 +222,8 @@ abstract class MyPod(
         // Get the angle to the checkpoint in radians
         val targetAngle = Point.angleBetween(posX, posY, targetCheckpoint.position.x, targetCheckpoint.position.y) * PI / 180.0
 
-        // Predict the actual velocity after applying thrust
-        val predictedVelocity = predictActualVelocity(targetAngle, baseThrust)
-
-        // Calculate the current speed
-        val currentSpeed = sqrt(velocity.first.toDouble().pow(2) + velocity.second.toDouble().pow(2))
+        // Get the current speed
+        val currentSpeed = getCurrentSpeed()
 
         // Calculate the dot product to determine if we're moving in the right direction
         val dotProduct = velocity.first * cos(targetAngle) + velocity.second * sin(targetAngle)
@@ -249,12 +245,11 @@ abstract class MyPod(
         }
     }
 
-    // Log inertia information for debugging
+    // Log information for debugging
     protected fun logInertiaInfo(podType: String) {
-        val speed = sqrt(velocity.first.toDouble().pow(2) + velocity.second.toDouble().pow(2))
+        val speed = getCurrentSpeed()
 
         System.err.println("Pod $podType - " +
-                "Inertia: $testInertiaValue, " +
                 "Speed: $speed, " +
                 "Velocity: (${velocity.first}, ${velocity.second}), " +
                 "Thrust: $thrust")
@@ -262,9 +257,9 @@ abstract class MyPod(
 
     fun getCommand(): String {
         return when {
-            useShield -> "$targetX $targetY SHIELD"
-            useBoost -> "$targetX $targetY BOOST"
-            else -> "$targetX $targetY $thrust"
+            useShield -> "$targetX $targetY SHIELD SHIELD"
+            useBoost -> "$targetX $targetY BOOST BOOST"
+            else -> "$targetX $targetY $thrust Thrust:$thrust"
         }
     }
 
@@ -364,81 +359,44 @@ class BlockerPod(
     }
 
     override fun calculateThrust(checkpoints: List<Checkpoint>, turn: Int, opponentPods: List<OpponentPod>, sharedBoostAvailable: Boolean) {
-        // This is a default implementation that will be overridden by calculateBlockerTarget
-        val currentCheckpoint = checkpoints[nextCheckpointId]
-        val angleDiff = Math.abs(angleToCheckpoint(currentCheckpoint))
-
-        // Reset flags
-        if (shieldActive == 0) {  // Only reset if shield is not active
-            useShield = false
-        }
-        useBoost = false
-
-        // Determine thrust based on angle
-        thrust = when {
-            angleDiff > 90 -> 0
-            angleDiff > 50 -> 50
-            else -> 100
-        }
-
-        // Decide whether to use shield - use collision prediction
-        useShield = shouldActivateShield(opponentPods)
-
-        // Log inertia information for debugging
-        logInertiaInfo("BLOCKER")
+        // This method is required by the abstract class but not used
+        // The actual implementation is in calculateBlockerTarget
     }
 
-    fun calculateBlockerTarget(leadingOpponent: OpponentPod, checkpoints: List<Checkpoint>, blockOpponent: Boolean) {
+    fun calculateBlockerTarget(leadingOpponent: OpponentPod, checkpoints: List<Checkpoint>) {
         // Reset flags
         if (shieldActive == 0) {  // Only reset if shield is not active
             useShield = false
         }
         useBoost = false
 
-        if (blockOpponent) {
-            // Aim to intercept the leading opponent - use direct coordinates
-            targetX = leadingOpponent.posX + leadingOpponent.velocity.first
-            targetY = leadingOpponent.posY + leadingOpponent.velocity.second
-            thrust = 100
+        // Aim to intercept the leading opponent - use direct coordinates
+        targetX = leadingOpponent.posX + leadingOpponent.velocity.first
+        targetY = leadingOpponent.posY + leadingOpponent.velocity.second
+        thrust = 100
 
-            // For blocker pod, check for imminent collision with the target opponent
-            // and activate shield preemptively if we're on an intercept course
-            val distanceToOpponent = Point.distanceBetween(posX, posY, leadingOpponent.posX, leadingOpponent.posY)
+        // For blocker pod, check for imminent collision with the target opponent
+        // and activate shield preemptively if we're on an intercept course
+        val distanceToOpponent = Point.distanceBetween(posX, posY, leadingOpponent.posX, leadingOpponent.posY)
 
-            // If we're close to the opponent and shield is available
-            if (shieldCooldown == 0 && distanceToOpponent < 1200) {
-                // Calculate time to collision more precisely for blocking
-                val (collisionTime, probability) = predictCollision(leadingOpponent)
+        // If we're close to the opponent and shield is available
+        if (shieldCooldown == 0 && distanceToOpponent < 1200) {
+            // Calculate time to collision more precisely for blocking
+            val (collisionTime, probability) = predictCollision(leadingOpponent)
 
-                // If collision is very likely and we're moving fast toward the opponent
-                if (collisionTime < 2 && probability > 0.5) {
-                    val relativeSpeed = sqrt(
-                        Math.pow((velocity.first - leadingOpponent.velocity.first).toDouble(), 2.0) +
-                        Math.pow((velocity.second - leadingOpponent.velocity.second).toDouble(), 2.0)
-                    )
+            // If collision is very likely and we're moving fast toward the opponent
+            if (collisionTime < 2 && probability > 0.5) {
+                val relativeSpeed = getRelativeSpeed(leadingOpponent)
 
-                    // Be more aggressive with shield usage when actively blocking
-                    if (relativeSpeed > 200) {
-                        useShield = true
-                        System.err.println("BLOCKER: Shield activated for interception! Collision in $collisionTime turns, speed: $relativeSpeed")
-                    }
+                // Be more aggressive with shield usage when actively blocking
+                if (relativeSpeed > 200) {
+                    useShield = true
+                    System.err.println("BLOCKER: Shield activated for interception! Collision in $collisionTime turns, speed: $relativeSpeed")
                 }
-            }
-        } else {
-            // Race normally - use direct coordinates
-            val currentCheckpoint = checkpoints[nextCheckpointId]
-            targetX = currentCheckpoint.position.x
-            targetY = currentCheckpoint.position.y
-
-            val angleDiff = Math.abs(angleToCheckpoint(currentCheckpoint))
-            thrust = when {
-                angleDiff > 90 -> 0
-                angleDiff > 50 -> 50
-                else -> 100
             }
         }
 
-        // Log inertia information for debugging
+        // Log information for debugging
         logInertiaInfo("BLOCKER")
     }
 }
@@ -555,11 +513,8 @@ fun main(args : Array<String>) {
         val blockerPod = myPods[1] as BlockerPod
 
 
-        // Always block the opponent with highest progress
-        val blockOpponent = true
-
         // Calculate target and thrust for blocker pod
-        blockerPod.calculateBlockerTarget(leadingOpponent, checkpoints, blockOpponent)
+        blockerPod.calculateBlockerTarget(leadingOpponent, checkpoints)
 
 
         // Output commands for both pods
