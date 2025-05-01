@@ -2,21 +2,21 @@ import java.util.*
 import kotlin.math.*
 
 /**
- * Mad Pod Racing Gold League Implementation
- * Based on the rules and strategies from MadPodRacingGold.md
+ * 매드 포드 레이싱 골드 리그 구현
+ * MadPodRacingGold.md의 규칙과 전략을 기반으로 함
  */
 
-// Constants shared across the application
+// 애플리케이션 전체에서 공유되는 상수
 object GameConstants {
     const val FRICTION = 0.85
     const val POD_SIZE = 400.0
     const val CHECKPOINT_RADIUS = 600.0
 
-    // Constants for trajectory optimization
+    // 궤적 최적화를 위한 상수
     const val MIN_DISTANCE_FOR_OPTIMIZATION = 50.0
     const val MAX_ANGLE_FOR_OPTIMIZATION = 70.0
 
-    // Constants for hairpin turn handling
+    // 헤어핀 턴 처리를 위한 상수
     const val HAIRPIN_HIGH_ANGLE = 70
     const val HAIRPIN_MID_ANGLE = 40
     const val HAIRPIN_HIGH_THRUST = 100
@@ -24,56 +24,56 @@ object GameConstants {
     const val HAIRPIN_LOW_THRUST = 0
 }
 
-// Vector utility functions to avoid duplication
+// 중복을 피하기 위한 벡터 유틸리티 함수
 object VectorUtils {
-    // Calculate magnitude of a vector
+    // 벡터의 크기 계산
     fun magnitude(x: Int, y: Int): Double = 
         sqrt(x.toDouble().pow(2) + y.toDouble().pow(2))
 
-    // Calculate magnitude of a vector with double components
+    // 더블 컴포넌트를 가진 벡터의 크기 계산
     fun magnitude(x: Double, y: Double): Double = 
         sqrt(x.pow(2) + y.pow(2))
 
-    // Calculate dot product of two vectors
+    // 두 벡터의 내적 계산
     fun dotProduct(x1: Int, y1: Int, x2: Int, y2: Int): Int =
         x1 * x2 + y1 * y2
 
-    // Calculate dot product of two vectors with double components
+    // 더블 컴포넌트를 가진 두 벡터의 내적 계산
     fun dotProduct(x1: Double, y1: Double, x2: Double, y2: Double): Double =
         x1 * x2 + y1 * y2
 
-    // Normalize a vector
+    // 벡터 정규화
     fun normalize(x: Int, y: Int): Pair<Double, Double> {
         val mag = magnitude(x, y)
         return if (mag > 0.001) Pair(x / mag, y / mag) else Pair(0.0, 0.0)
     }
 
-    // Normalize a vector with double components
+    // 더블 컴포넌트를 가진 벡터 정규화
     fun normalize(x: Double, y: Double): Pair<Double, Double> {
         val mag = magnitude(x, y)
         return if (mag > 0.001) Pair(x / mag, y / mag) else Pair(0.0, 0.0)
     }
 
-    // Calculate squared distance between two points (optimization for comparisons)
+    // 두 점 사이의 제곱 거리 계산 (비교를 위한 최적화)
     fun squaredDistance(x1: Int, y1: Int, x2: Int, y2: Int): Double =
         (x1 - x2).toDouble().pow(2) + (y1 - y2).toDouble().pow(2)
 }
 
-// Data classes for game entities
+// 게임 엔티티를 위한 데이터 클래스
 data class Point(val x: Int, val y: Int) {
     companion object {
-        // Static methods to avoid creating temporary Point objects
+        // 임시 Point 객체 생성을 피하기 위한 정적 메서드
         fun distanceBetween(x1: Int, y1: Int, x2: Int, y2: Int): Double =
             sqrt(VectorUtils.squaredDistance(x1, y1, x2, y2))
 
-        // Squared distance for comparison purposes (optimization)
+        // 비교 목적을 위한 제곱 거리 (최적화)
         fun squaredDistanceBetween(x1: Int, y1: Int, x2: Int, y2: Int): Double =
             VectorUtils.squaredDistance(x1, y1, x2, y2)
 
         fun angleBetween(x1: Int, y1: Int, x2: Int, y2: Int): Double =
             atan2((y2 - y1).toDouble(), (x2 - x1).toDouble()) * 180 / PI
 
-        // Calculate the closest point on a line (defined by points a and b) to point p
+        // 선 위의 가장 가까운 점 계산 (점 a와 b로 정의된 선에서 점 p까지)
         fun closestPointToLine(a: Point, b: Point, p: Point): Point {
             val vectorAtoP = Point(p.x - a.x, p.y - a.y)
             val vectorAtoB = Point(b.x - a.x, b.y - a.y)
@@ -85,7 +85,7 @@ data class Point(val x: Int, val y: Int) {
                 return p
             }
 
-            // Use VectorUtils for dot product calculation
+            // 내적 계산을 위해 VectorUtils 사용
             val dotProduct = VectorUtils.dotProduct(vectorAtoP.x, vectorAtoP.y, vectorAtoB.x, vectorAtoB.y)
             val t = dotProduct / distanceAtoBSquared
 
@@ -95,7 +95,7 @@ data class Point(val x: Int, val y: Int) {
             )
         }
 
-        // Check if a point is inside a circle with center (cx, cy) and radius r
+        // 점이 중심 (cx, cy)와 반지름 r을 가진 원 안에 있는지 확인
         fun isInsideCircle(x: Int, y: Int, cx: Int, cy: Int, r: Double): Boolean {
             return squaredDistanceBetween(x, y, cx, cy) <= r * r
         }
@@ -104,22 +104,22 @@ data class Point(val x: Int, val y: Int) {
 
 data class Checkpoint(val position: Point, val id: Int)
 
-// Base Pod class with common functionality
+// 공통 기능을 가진 기본 포드 클래스
 open class BasePod(
     var position: Point,
     velocityPair: Pair<Int, Int>,
     var angle: Int,
     var nextCheckpointId: Int
 ) {
-    // Store position coordinates directly to avoid creating Point objects
+    // Point 객체 생성을 피하기 위해 위치 좌표를 직접 저장
     var posX: Int = position.x
     var posY: Int = position.y
 
-    // Store velocity components directly to avoid creating Pair objects
+    // Pair 객체 생성을 피하기 위해 속도 구성 요소를 직접 저장
     var velocityX: Int = velocityPair.first
     var velocityY: Int = velocityPair.second
 
-    // Keep velocity as Pair for backward compatibility
+    // 이전 버전과의 호환성을 위해 속도를 Pair로 유지
     var velocity: Pair<Int, Int> = velocityPair
         get() = Pair(velocityX, velocityY)
         set(value) {
@@ -128,7 +128,7 @@ open class BasePod(
             velocityY = value.second
         }
 
-    // Squared distance for comparison purposes (optimization)
+    // 비교 목적을 위한 제곱 거리 (최적화)
     fun squaredDistanceToCheckpoint(checkpoint: Checkpoint): Double = 
         Point.squaredDistanceBetween(posX, posY, checkpoint.position.x, checkpoint.position.y)
 
@@ -138,7 +138,7 @@ open class BasePod(
         return if (angleDiff > 180) angleDiff - 360 else angleDiff
     }
 
-    // Check if a position is inside a checkpoint
+    // 위치가 체크포인트 내부에 있는지 확인
     protected fun isPodInsideCheckpoint(x: Int, y: Int, checkpoint: Checkpoint): Boolean {
         return Point.isInsideCircle(
             x,
@@ -149,18 +149,18 @@ open class BasePod(
         )
     }
 
-    // Calculate current speed
+    // 현재 속도 계산
     fun getCurrentSpeed(): Double = 
         VectorUtils.magnitude(velocityX, velocityY)
 
-    // Calculate relative speed between this pod and another pod
+    // 이 포드와 다른 포드 사이의 상대 속도 계산
     fun getRelativeSpeed(otherPod: BasePod): Double = 
         VectorUtils.magnitude(
             velocityX - otherPod.velocityX,
             velocityY - otherPod.velocityY
         )
 
-    // Predict if the pod will enter a checkpoint in the next few turns
+    // 포드가 다음 몇 턴 안에 체크포인트에 들어갈지 예측
     fun isGoingToEnterCheckpointSoon(checkpoints: List<Checkpoint>): Boolean {
         val currentCheckpoint = checkpoints[nextCheckpointId]
         var velocityX = this.velocityX
@@ -168,17 +168,17 @@ open class BasePod(
         var approxPositionX = posX
         var approxPositionY = posY
 
-        // Simulate movement for the next 6 turns
+        // 다음 6턴 동안의 움직임 시뮬레이션
         repeat(6) {
-            // Apply friction to velocity
+            // 속도에 마찰 적용
             velocityX = (velocityX * GameConstants.FRICTION).toInt()
             velocityY = (velocityY * GameConstants.FRICTION).toInt()
 
-            // Update position based on velocity
+            // 속도를 기반으로 위치 업데이트
             approxPositionX += velocityX
             approxPositionY += velocityY
 
-            // Check if pod is inside checkpoint
+            // 포드가 체크포인트 내부에 있는지 확인
             if (isPodInsideCheckpoint(approxPositionX, approxPositionY, currentCheckpoint)) {
                 return true
             }
@@ -188,14 +188,14 @@ open class BasePod(
     }
 
     open fun update(x: Int, y: Int, vx: Int, vy: Int, angle: Int, nextCheckpointId: Int) {
-        // Update position coordinates directly
+        // 위치 좌표 직접 업데이트
         posX = x
         posY = y
-        // Update Point object in-place by modifying its fields if possible
-        // Since Point is immutable, we need to create a new one, but we could optimize this
-        // by making Point mutable or using a different approach in a future refactoring
+        // 가능하다면 필드를 수정하여 Point 객체를 제자리에서 업데이트
+        // Point는 불변이므로 새로운 객체를 생성해야 하지만, 이는 최적화할 수 있음
+        // 향후 리팩토링에서 Point를 가변으로 만들거나 다른 접근 방식을 사용하여 최적화 가능
         position = Point(x, y)
-        // Update velocity components directly
+        // 속도 구성 요소 직접 업데이트
         velocityX = vx
         velocityY = vy
         // Update velocity Pair for backward compatibility
@@ -885,8 +885,8 @@ class OpponentPod(
 }
 
 /**
- * Finds the index of the opponent pod with the highest progress.
- * Progress is determined by laps completed and checkpoint ID.
+ * 가장 진행이 많이 된 상대 포드의 인덱스를 찾습니다.
+ * 진행 상황은 완료된 랩 수와 체크포인트 ID로 결정됩니다.
  */
 fun findLeadingOpponentIndex(opponentPods: List<OpponentPod>): Int {
     return if (opponentPods[0].laps > opponentPods[1].laps || 
@@ -895,13 +895,13 @@ fun findLeadingOpponentIndex(opponentPods: List<OpponentPod>): Int {
 }
 
 /**
- * Main function that initializes the game state and runs the game loop.
- * The game loop:
- * 1. Updates pod positions based on input
- * 2. Finds the leading opponent pod
- * 3. Calculates strategies for racer and blocker pods
- * 4. Outputs commands for both pods
- * 5. Updates shield status
+ * 게임 상태를 초기화하고 게임 루프를 실행하는 메인 함수입니다.
+ * 게임 루프:
+ * 1. 입력을 기반으로 포드 위치 업데이트
+ * 2. 선두 상대 포드 찾기
+ * 3. 레이서 및 블로커 포드에 대한 전략 계산
+ * 4. 두 포드에 대한 명령 출력
+ * 5. 쉴드 상태 업데이트
  */
 fun main() {
     val input = Scanner(System.`in`)
