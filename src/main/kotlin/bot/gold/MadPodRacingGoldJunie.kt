@@ -619,6 +619,52 @@ class BlockerPod(
         )
     }
 
+    // Detect if we're approaching a hairpin turn
+    private fun isHairpinTurn(checkpoints: List<Checkpoint>, checkpointCount: Int): Boolean {
+        val currentCheckpoint = checkpoints[nextCheckpointId]
+        val nextCheckpointIndex = (nextCheckpointId + 1) % checkpointCount
+        val nextCheckpoint = checkpoints[nextCheckpointIndex]
+
+        // Calculate the angle between current checkpoint and next checkpoint
+        val vectorToCurrent = Point(
+            currentCheckpoint.position.x - posX,
+            currentCheckpoint.position.y - posY
+        )
+        val vectorToNext = Point(
+            nextCheckpoint.position.x - currentCheckpoint.position.x,
+            nextCheckpoint.position.y - currentCheckpoint.position.y
+        )
+
+        // Calculate the angle between these vectors
+        val dotProduct = vectorToCurrent.x * vectorToNext.x + vectorToCurrent.y * vectorToNext.y
+        val magnitudeCurrent = sqrt(vectorToCurrent.x.toDouble().pow(2) + vectorToCurrent.y.toDouble().pow(2))
+        val magnitudeNext = sqrt(vectorToNext.x.toDouble().pow(2) + vectorToNext.y.toDouble().pow(2))
+
+        // Avoid division by zero
+        if (magnitudeCurrent < 0.001 || magnitudeNext < 0.001) {
+            return false
+        }
+
+        val cosAngle = dotProduct / (magnitudeCurrent * magnitudeNext)
+        // Clamp to avoid domain errors with acos
+        val clampedCosAngle = cosAngle.coerceIn(-1.0, 1.0)
+        val angleBetweenCheckpoints = Math.toDegrees(acos(clampedCosAngle))
+
+        // If the angle is large (> 90 degrees) and we're close to the current checkpoint, it's a hairpin
+        val squaredDistance = squaredDistanceToCheckpoint(currentCheckpoint)
+        val isCloseToCheckpoint = squaredDistance < 4000000 // 2000^2 = 4000000
+        val isLargeAngle = angleBetweenCheckpoints > 90
+
+        if (isLargeAngle && isCloseToCheckpoint) {
+            // For logging, get the actual distance
+            val distance = sqrt(squaredDistance)
+            System.err.println("BLOCKER: Detected hairpin turn! Angle between checkpoints: $angleBetweenCheckpoints, Distance: $distance")
+            return true
+        }
+
+        return false
+    }
+
     // Function to handle the logic for targeting the second checkpoint when there are 4 or fewer checkpoints
     private fun targetSecondCheckpoint(checkpoints: List<Checkpoint>, checkpointCount: Int) {
         // Get the second checkpoint (index 1)
@@ -632,45 +678,109 @@ class BlockerPod(
             targetY = secondCheckpoint.position.y
             thrust = 0
             System.err.println("BLOCKER: Camping at second checkpoint (checkpointCount=$checkpointCount)")
+            return
+        }
+
+        // If we're about to enter the checkpoint, aim for the next one
+        if (isGoingToEnterCheckpointSoon(checkpoints)) {
+            val nextCheckpointIndex = (secondCheckpointIndex + 1) % checkpointCount
+            val nextCheckpoint = checkpoints[nextCheckpointIndex]
+
+            targetX = nextCheckpoint.position.x
+            targetY = nextCheckpoint.position.y
+
+            val angleDiff = Math.abs(angleToCheckpoint(nextCheckpoint))
+            System.err.println("BLOCKER: Drifting towards next checkpoint, angle diff: $angleDiff")
+            return
+        }
+
+        // Calculate position delta and future position
+        val positionDelta = Pair(
+            (velocity.first * FRICTION).toInt(),
+            (velocity.second * FRICTION).toInt()
+        )
+        val distanceTravelledOnPreviousFrame = sqrt(
+            positionDelta.first.toDouble().pow(2) + 
+            positionDelta.second.toDouble().pow(2)
+        )
+        val futurePos = Point(posX + positionDelta.first, posY + positionDelta.second)
+
+        // Calculate the current speed
+        val currentSpeed = getCurrentSpeed()
+
+        // Calculate the distance to the checkpoint
+        val squaredDistance = squaredDistanceToCheckpoint(secondCheckpoint)
+        val distanceToCheckpoint = sqrt(squaredDistance)
+
+        // Calculate the angle to the checkpoint
+        val angleDiff = Math.abs(angleToCheckpoint(secondCheckpoint))
+
+        // Optimize trajectory using closestPointToLine if we're moving fast enough
+        val futureDistanceSquared = Point.squaredDistanceBetween(
+            futurePos.x, futurePos.y, 
+            secondCheckpoint.position.x, secondCheckpoint.position.y
+        )
+        val currentDistanceSquared = Point.squaredDistanceBetween(
+            posX, posY, 
+            secondCheckpoint.position.x, secondCheckpoint.position.y
+        )
+
+        if (distanceTravelledOnPreviousFrame > 50 && 
+            angleDiff < 70 && 
+            futureDistanceSquared < currentDistanceSquared) {
+
+            // Use closestPointToLine to optimize trajectory
+            val currentPos = Point(posX, posY)
+            val aux = Point.closestPointToLine(currentPos, secondCheckpoint.position, futurePos)
+            val aux2 = Point(
+                aux.x + (aux.x - futurePos.x),
+                aux.y + (aux.y - futurePos.y)
+            )
+
+            targetX = aux2.x
+            targetY = aux2.y
+            System.err.println("BLOCKER: Optimizing trajectory using closestPointToLine")
         } else {
-            // Calculate the current speed
-            val currentSpeed = getCurrentSpeed()
-
-            // Calculate the distance to the checkpoint
-            val distanceToCheckpoint = sqrt(squaredDistanceToCheckpoint(secondCheckpoint))
-
-            // Calculate the angle to the checkpoint
-            val angleDiff = Math.abs(angleToCheckpoint(secondCheckpoint))
-
             // Adjust target position based on inertia
             val (adjustedX, adjustedY) = calculateInertiaAdjustedTarget(secondCheckpoint)
             targetX = adjustedX
             targetY = adjustedY
+        }
 
+        // Check if we're in a hairpin turn
+        val isHairpin = isHairpinTurn(checkpoints, checkpoints.size)
+
+        // Cornering sequence for hairpin turns
+        if (isHairpin) {
+            // If we're in a sharp turn and the angle is large, turn off the engine
+            if (angleDiff > 70) {
+                thrust = 0
+                System.err.println("BLOCKER: Hairpin turn: Engine off, rotating only. Angle diff: $angleDiff")
+            } 
+            // Once we've rotated enough, gradually increase thrust
+            else if (angleDiff > 40) {
+                thrust = 30
+                System.err.println("BLOCKER: Hairpin turn: Minimal thrust during turn. Angle diff: $angleDiff")
+            }
+            // When angle is good enough, resume normal thrust
+            else {
+                thrust = 100
+                System.err.println("BLOCKER: Hairpin turn: Resuming thrust. Angle diff: $angleDiff")
+            }
+        } else {
             // Adjust thrust based on distance, angle, and inertia
             val baseThrust = when {
-                // If we're far from the checkpoint and facing it, use full thrust
-                distanceToCheckpoint > 3000 && angleDiff < 30 -> 100
-
-                // If we're at a medium distance, adjust thrust based on angle
-                distanceToCheckpoint > 1500 -> when {
-                    angleDiff > 90 -> 0  // If we're facing away, stop to turn
-                    angleDiff > 45 -> 50 // If we're at a significant angle, use medium thrust
-                    else -> 100          // Otherwise, full thrust
-                }
-
-                // If we're close to the checkpoint, reduce thrust to avoid overshooting
-                else -> when {
-                    angleDiff > 45 -> 0  // If we're at a significant angle, stop to turn
-                    else -> 70           // Otherwise, use reduced thrust for precision
-                }
+                angleDiff > 90 -> 0
+                angleDiff > 50 -> 50
+                squaredDistance < 1000000 -> 70 // 1000^2 = 1000000
+                else -> 100
             }
 
             // Apply inertia correction to thrust
             thrust = adjustThrustForInertia(baseThrust, secondCheckpoint)
-
-            System.err.println("BLOCKER: Moving to second checkpoint - Distance: $distanceToCheckpoint, Angle: $angleDiff, Thrust: $thrust")
         }
+
+        System.err.println("BLOCKER: Moving to second checkpoint - Distance: $distanceToCheckpoint, Angle: $angleDiff, Thrust: $thrust")
     }
 
     // BlockerPod uses the default implementations of calculateTarget and calculateThrust from MyPod
