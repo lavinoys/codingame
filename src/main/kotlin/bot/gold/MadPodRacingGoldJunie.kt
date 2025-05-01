@@ -48,6 +48,12 @@ object VectorUtils {
         return if (mag > 0.001) Pair(x / mag, y / mag) else Pair(0.0, 0.0)
     }
 
+    // Normalize a vector with double components
+    fun normalize(x: Double, y: Double): Pair<Double, Double> {
+        val mag = magnitude(x, y)
+        return if (mag > 0.001) Pair(x / mag, y / mag) else Pair(0.0, 0.0)
+    }
+
     // Calculate squared distance between two points (optimization for comparisons)
     fun squaredDistance(x1: Int, y1: Int, x2: Int, y2: Int): Double =
         (x1 - x2).toDouble().pow(2) + (y1 - y2).toDouble().pow(2)
@@ -132,6 +138,17 @@ open class BasePod(
         return if (angleDiff > 180) angleDiff - 360 else angleDiff
     }
 
+    // Check if a position is inside a checkpoint
+    protected fun isPodInsideCheckpoint(x: Int, y: Int, checkpoint: Checkpoint): Boolean {
+        return Point.isInsideCircle(
+            x,
+            y,
+            checkpoint.position.x,
+            checkpoint.position.y,
+            GameConstants.CHECKPOINT_RADIUS
+        )
+    }
+
     // Calculate current speed
     fun getCurrentSpeed(): Double = 
         VectorUtils.magnitude(velocityX, velocityY)
@@ -162,13 +179,7 @@ open class BasePod(
             approxPositionY += velocityY
 
             // Check if pod is inside checkpoint
-            if (Point.isInsideCircle(
-                    approxPositionX,
-                    approxPositionY,
-                    currentCheckpoint.position.x,
-                    currentCheckpoint.position.y,
-                    GameConstants.CHECKPOINT_RADIUS
-                )) {
+            if (isPodInsideCheckpoint(approxPositionX, approxPositionY, currentCheckpoint)) {
                 return true
             }
         }
@@ -217,6 +228,36 @@ abstract class MyPod(
     val collisionRadius = GameConstants.POD_SIZE.toInt() // Radius to consider for collision
     val collisionTimeThreshold = 3 // Number of turns to look ahead for collision prediction
     val collisionProbabilityThreshold = 0.7 // Probability threshold to activate shield
+
+    // Calculate dynamic collision radius based on relative speed
+    protected fun calculateDynamicCollisionRadius(relativeSpeed: Double): Int {
+        return collisionRadius + (relativeSpeed * 0.5).toInt().coerceAtMost(GameConstants.POD_SIZE.toInt())
+    }
+
+    // Calculate dot product between pod's velocity and a direction vector
+    protected fun calculateVelocityDirectionDotProduct(directionX: Double, directionY: Double): Double {
+        return VectorUtils.dotProduct(
+            velocityX.toDouble(), velocityY.toDouble(),
+            directionX, directionY
+        )
+    }
+
+    // Calculate angle between two vectors
+    protected fun calculateAngleBetweenVectors(v1x: Int, v1y: Int, v2x: Int, v2y: Int): Double {
+        val dotProduct = VectorUtils.dotProduct(v1x, v1y, v2x, v2y)
+        val magnitude1 = VectorUtils.magnitude(v1x, v1y)
+        val magnitude2 = VectorUtils.magnitude(v2x, v2y)
+
+        // Avoid division by zero
+        if (magnitude1 < 0.001 || magnitude2 < 0.001) {
+            return 0.0
+        }
+
+        val cosAngle = dotProduct / (magnitude1 * magnitude2)
+        // Clamp to avoid domain errors with acos
+        val clampedCosAngle = cosAngle.coerceIn(-1.0, 1.0)
+        return Math.toDegrees(acos(clampedCosAngle))
+    }
 
     // Optimize trajectory using closestPointToLine if conditions are met
     protected fun optimizeTrajectory(checkpoint: Checkpoint, podType: String): Boolean {
@@ -278,23 +319,16 @@ abstract class MyPod(
         val vectorToNextX = nextCheckpoint.position.x - currentCheckpoint.position.x
         val vectorToNextY = nextCheckpoint.position.y - currentCheckpoint.position.y
 
-        // Calculate the angle between these vectors using VectorUtils
-        val dotProduct = VectorUtils.dotProduct(
+        // Calculate the angle between these vectors using our helper function
+        val angleBetweenCheckpoints = calculateAngleBetweenVectors(
             vectorToCurrentX, vectorToCurrentY, 
             vectorToNextX, vectorToNextY
         )
-        val magnitudeCurrent = VectorUtils.magnitude(vectorToCurrentX, vectorToCurrentY)
-        val magnitudeNext = VectorUtils.magnitude(vectorToNextX, vectorToNextY)
 
-        // Avoid division by zero
-        if (magnitudeCurrent < 0.001 || magnitudeNext < 0.001) {
+        // If the calculation returned 0, it means one of the vectors had near-zero magnitude
+        if (angleBetweenCheckpoints == 0.0) {
             return false
         }
-
-        val cosAngle = dotProduct / (magnitudeCurrent * magnitudeNext)
-        // Clamp to avoid domain errors with acos
-        val clampedCosAngle = cosAngle.coerceIn(-1.0, 1.0)
-        val angleBetweenCheckpoints = Math.toDegrees(acos(clampedCosAngle))
 
         // If the angle is large (> 90 degrees) and we're close to the current checkpoint, it's a hairpin
         val squaredDistance = squaredDistanceToCheckpoint(currentCheckpoint)
@@ -345,7 +379,7 @@ abstract class MyPod(
 
         // Make collision radius dynamic based on relative speed
         // Higher speeds need larger collision radius to account for movement between turns
-        val dynamicCollisionRadius = collisionRadius + (relativeSpeed * 0.5).toInt().coerceAtMost(GameConstants.POD_SIZE.toInt())
+        val dynamicCollisionRadius = calculateDynamicCollisionRadius(relativeSpeed)
 
         // Calculate quadratic equation coefficients for collision time
         // ||p + vt|| = r, where p is relative position, v is relative velocity, r is collision radius
@@ -418,7 +452,7 @@ abstract class MyPod(
                 val squaredDistance = Point.squaredDistanceBetween(posX, posY, opponentPod.posX, opponentPod.posY)
                 val distance = sqrt(squaredDistance)  // Only calculate actual distance for logging
                 val relativeSpeed = getRelativeSpeed(opponentPod)
-                val dynamicRadius = collisionRadius + (relativeSpeed * 0.5).toInt().coerceAtMost(GameConstants.POD_SIZE.toInt())
+                val dynamicRadius = calculateDynamicCollisionRadius(relativeSpeed)
                 System.err.println("Collision prediction: Time=$collisionTime, Prob=$probability, Dist=$distance, RelSpeed=$relativeSpeed, Radius=$dynamicRadius")
             }
 
@@ -503,11 +537,7 @@ abstract class MyPod(
         val directionY = sin(targetAngleRadians)
 
         // Calculate the dot product to determine if we're moving in the right direction
-        // using VectorUtils for better readability
-        val dotProduct = VectorUtils.dotProduct(
-            velocityX.toDouble(), velocityY.toDouble(),
-            directionX, directionY
-        )
+        val dotProduct = calculateVelocityDirectionDotProduct(directionX, directionY)
         val movingTowardsTarget = dotProduct > 0
 
         // Adjust thrust based on inertia and current movement
@@ -567,13 +597,7 @@ abstract class MyPod(
 
     // Check if the pod is currently inside a checkpoint
     protected fun isInsideCheckpoint(checkpoint: Checkpoint): Boolean {
-        return Point.isInsideCircle(
-            posX,
-            posY,
-            checkpoint.position.x,
-            checkpoint.position.y,
-            GameConstants.CHECKPOINT_RADIUS
-        )
+        return isPodInsideCheckpoint(posX, posY, checkpoint)
     }
 
     // Check if the pod is at the exact x,y position of the checkpoint and has near-zero velocity
@@ -607,30 +631,11 @@ abstract class MyPod(
         val directionX = checkpoint.position.x - posX
         val directionY = checkpoint.position.y - posY
 
-        // Get direction vector length
-        val directionLength = VectorUtils.magnitude(directionX, directionY)
+        // Get normalized direction vector using VectorUtils
+        val (normalizedDirX, normalizedDirY) = VectorUtils.normalize(directionX.toDouble(), directionY.toDouble())
 
-        // Calculate normalized direction vector components
-        // Avoid creating a Pair object for better performance
-        val normalizedDirX: Double
-        val normalizedDirY: Double
-
-        if (directionLength > 0.001) {
-            normalizedDirX = directionX / directionLength
-            normalizedDirY = directionY / directionLength
-        } else {
-            normalizedDirX = 0.0
-            normalizedDirY = 0.0
-        }
-
-        // Calculate dot product with velocity using VectorUtils
-        val dotProduct = VectorUtils.dotProduct(
-            velocityX.toDouble(), velocityY.toDouble(),
-            normalizedDirX, normalizedDirY
-        )
-
-        // If dot product is positive, we're moving towards the checkpoint
-        return dotProduct > 0
+        // Calculate dot product with velocity and check if it's positive
+        return calculateVelocityDirectionDotProduct(normalizedDirX, normalizedDirY) > 0
     }
 
     fun getCommand(): String {
@@ -880,6 +885,16 @@ class OpponentPod(
 }
 
 /**
+ * Finds the index of the opponent pod with the highest progress.
+ * Progress is determined by laps completed and checkpoint ID.
+ */
+fun findLeadingOpponentIndex(opponentPods: List<OpponentPod>): Int {
+    return if (opponentPods[0].laps > opponentPods[1].laps || 
+              (opponentPods[0].laps == opponentPods[1].laps && 
+               opponentPods[0].nextCheckpointId > opponentPods[1].nextCheckpointId)) 0 else 1
+}
+
+/**
  * Main function that initializes the game state and runs the game loop.
  * The game loop:
  * 1. Updates pod positions based on input
@@ -952,10 +967,8 @@ fun main() {
             opponentPods[i].update(opponentPositionX, opponentPositionY, opponentVelocityX, opponentVelocityY, opponentAngle, opponentNextCheckpointId)
         }
 
-        // Find the opponent pod with highest progress (considering laps and checkpoint ID)
-        val leadingOpponentIndex = if (opponentPods[0].laps > opponentPods[1].laps || 
-                                     (opponentPods[0].laps == opponentPods[1].laps && 
-                                      opponentPods[0].nextCheckpointId > opponentPods[1].nextCheckpointId)) 0 else 1
+        // Find the opponent pod with highest progress
+        val leadingOpponentIndex = findLeadingOpponentIndex(opponentPods)
 
         val leadingOpponent = opponentPods[leadingOpponentIndex]
         val opponentProgress = "Lap: ${leadingOpponent.laps}, CP: ${leadingOpponent.nextCheckpointId}"
