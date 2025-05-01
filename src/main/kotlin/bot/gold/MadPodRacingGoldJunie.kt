@@ -15,6 +15,32 @@ data class Point(val x: Int, val y: Int) {
 
         fun angleBetween(x1: Int, y1: Int, x2: Int, y2: Int): Double =
             atan2((y2 - y1).toDouble(), (x2 - x1).toDouble()) * 180 / PI
+
+        // Calculate the closest point on a line (defined by points a and b) to point p
+        fun closestPointToLine(a: Point, b: Point, p: Point): Point {
+            val aToP = Point(p.x - a.x, p.y - a.y)
+            val aToB = Point(b.x - a.x, b.y - a.y)
+
+            val atb2 = distanceBetween(a.x, a.y, b.x, b.y)
+            val atb2Squared = atb2 * atb2
+
+            if (atb2Squared < 0.0001) {
+                return p
+            }
+
+            val atpDotAtb = aToP.x * aToB.x + aToP.y * aToB.y
+            val t = atpDotAtb / atb2Squared
+
+            return Point(
+                (a.x + aToB.x * t).toInt(),
+                (a.y + aToB.y * t).toInt()
+            )
+        }
+
+        // Check if a point is inside a circle with center (cx, cy) and radius r
+        fun isInsideCircle(x: Int, y: Int, cx: Int, cy: Int, r: Double): Boolean {
+            return distanceBetween(x, y, cx, cy) <= r
+        }
     }
 }
 
@@ -30,6 +56,13 @@ open class BasePod(
     // Store position coordinates directly to avoid creating Point objects
     var posX: Int = position.x
     var posY: Int = position.y
+
+    // Constants
+    companion object {
+        const val FRICTION = 0.85
+        const val POD_SIZE = 400.0
+        const val CHECKPOINT_RADIUS = 600.0
+    }
 
     fun distanceToCheckpoint(checkpoint: Checkpoint): Double = 
         Point.distanceBetween(posX, posY, checkpoint.position.x, checkpoint.position.y)
@@ -50,6 +83,41 @@ open class BasePod(
             Math.pow((velocity.first - otherPod.velocity.first).toDouble(), 2.0) +
             Math.pow((velocity.second - otherPod.velocity.second).toDouble(), 2.0)
         )
+
+    // Predict if the pod will enter a checkpoint in the next few turns
+    fun isGoingToEnterCheckpointSoon(checkpoints: List<Checkpoint>): Boolean {
+        val currentCheckpoint = checkpoints[nextCheckpointId]
+        var velocity = Pair(this.velocity.first, this.velocity.second)
+        var approxPosition = Point(posX, posY)
+
+        // Simulate movement for the next 6 turns
+        for (i in 0 until 6) {
+            // Apply friction to velocity
+            velocity = Pair(
+                (velocity.first * FRICTION).toInt(),
+                (velocity.second * FRICTION).toInt()
+            )
+
+            // Update position based on velocity
+            approxPosition = Point(
+                approxPosition.x + velocity.first,
+                approxPosition.y + velocity.second
+            )
+
+            // Check if pod is inside checkpoint
+            if (Point.isInsideCircle(
+                    approxPosition.x, 
+                    approxPosition.y, 
+                    currentCheckpoint.position.x, 
+                    currentCheckpoint.position.y, 
+                    CHECKPOINT_RADIUS
+                )) {
+                return true
+            }
+        }
+
+        return false
+    }
 
     open fun update(x: Int, y: Int, vx: Int, vy: Int, angle: Int, nextCheckpointId: Int) {
         // Update position coordinates directly
@@ -262,18 +330,96 @@ class RacerPod(
     shieldCooldown: Int = 0
 ) : MyPod(position, velocity, angle, nextCheckpointId, shieldCooldown) {
 
+    // Track checkpoint count for home run detection
+    private var checkpointCount = 0
+    private var lastCheckpointId = 0
+
+    override fun update(x: Int, y: Int, vx: Int, vy: Int, angle: Int, nextCheckpointId: Int) {
+        // Track checkpoint changes to count laps
+        if (this.nextCheckpointId != nextCheckpointId) {
+            checkpointCount++
+            lastCheckpointId = this.nextCheckpointId
+        }
+
+        super.update(x, y, vx, vy, angle, nextCheckpointId)
+    }
+
     override fun calculateTarget(checkpoints: List<Checkpoint>, checkpointCount: Int) {
         val currentCheckpoint = checkpoints[nextCheckpointId]
-        val nextCheckpointId = (nextCheckpointId + 1) % checkpointCount
-        val nextCheckpoint = checkpoints[nextCheckpointId]
+        val nextCheckpointIndex = (nextCheckpointId + 1) % checkpointCount
+        val nextCheckpoint = checkpoints[nextCheckpointIndex]
         val distance = distanceToCheckpoint(currentCheckpoint)
 
         // Get checkpoint coordinates directly
         val currentX = currentCheckpoint.position.x
         val currentY = currentCheckpoint.position.y
 
+        // Check if we're going for the home run (final lap, final checkpoint)
+        val isGoingForHomeRun = this.checkpointCount == (checkpointCount * 3)
+
+        if (isGoingForHomeRun) {
+            System.err.println("RacerPod: Going for the home run!")
+            targetX = currentX
+            targetY = currentY
+            return
+        }
+
+        // If we're about to enter the checkpoint, aim for the next one
+        if (isGoingToEnterCheckpointSoon(checkpoints)) {
+            val nextCheckpointX = nextCheckpoint.position.x
+            val nextCheckpointY = nextCheckpoint.position.y
+
+            targetX = nextCheckpointX
+            targetY = nextCheckpointY
+
+            val angleDiff = Math.abs(angleToCheckpoint(nextCheckpoint))
+            System.err.println("RacerPod: Drifting towards next checkpoint, angle diff: $angleDiff")
+            return
+        }
+
+        // Calculate position delta and future position
+        val positionDelta = Pair(
+            (velocity.first * FRICTION).toInt(),
+            (velocity.second * FRICTION).toInt()
+        )
+        val distanceTravelledOnPreviousFrame = sqrt(
+            positionDelta.first.toDouble().pow(2) + 
+            positionDelta.second.toDouble().pow(2)
+        )
+        val futurePos = Point(posX + positionDelta.first, posY + positionDelta.second)
+
+        // Optimize trajectory using closestPointToLine if we're moving fast enough
+        val angleDiff = Math.abs(angleToCheckpoint(currentCheckpoint))
+        val futureDistance = Point.distanceBetween(
+            futurePos.x, futurePos.y, 
+            currentCheckpoint.position.x, currentCheckpoint.position.y
+        )
+        val currentDistance = Point.distanceBetween(
+            posX, posY, 
+            currentCheckpoint.position.x, currentCheckpoint.position.y
+        )
+
+        if (distanceTravelledOnPreviousFrame > 50 && 
+            angleDiff < 70 && 
+            futureDistance < currentDistance) {
+
+            // Use closestPointToLine to optimize trajectory
+            val currentPos = Point(posX, posY)
+            val aux = Point.closestPointToLine(currentPos, currentCheckpoint.position, futurePos)
+            val aux2 = Point(
+                aux.x + (aux.x - futurePos.x),
+                aux.y + (aux.y - futurePos.y)
+            )
+
+            targetX = aux2.x
+            targetY = aux2.y
+            System.err.println("RacerPod: Optimizing trajectory using closestPointToLine")
+            return
+        }
+
+        // Default behavior - aim directly at checkpoint or next checkpoint if close
         if (distance < 1200) {
-            // If close to checkpoint, aim for the next one - calculate directly without creating temporary objects
+            // If close to checkpoint, aim for the next one
             val nextCheckpointX = nextCheckpoint.position.x
             val nextCheckpointY = nextCheckpoint.position.y
 
@@ -333,9 +479,87 @@ class BlockerPod(
     shieldCooldown: Int = 0
 ) : MyPod(position, velocity, angle, nextCheckpointId, shieldCooldown) {
 
+    // Track checkpoint count for home run detection
+    private var checkpointCount = 0
+    private var lastCheckpointId = 0
+
+    override fun update(x: Int, y: Int, vx: Int, vy: Int, angle: Int, nextCheckpointId: Int) {
+        // Track checkpoint changes to count laps
+        if (this.nextCheckpointId != nextCheckpointId) {
+            checkpointCount++
+            lastCheckpointId = this.nextCheckpointId
+        }
+
+        super.update(x, y, vx, vy, angle, nextCheckpointId)
+    }
+
     override fun calculateTarget(checkpoints: List<Checkpoint>, checkpointCount: Int) {
-        // For blocker, just aim at the current checkpoint
+        // For blocker, optimize trajectory to current checkpoint when not actively blocking
         val currentCheckpoint = checkpoints[nextCheckpointId]
+        val nextCheckpointIndex = (nextCheckpointId + 1) % checkpointCount
+        val nextCheckpoint = checkpoints[nextCheckpointIndex]
+
+        // Check if we're going for the home run (final lap, final checkpoint)
+        val isGoingForHomeRun = this.checkpointCount == (checkpointCount * 3)
+
+        if (isGoingForHomeRun) {
+            System.err.println("BlockerPod: Going for the home run!")
+            targetX = currentCheckpoint.position.x
+            targetY = currentCheckpoint.position.y
+            return
+        }
+
+        // If we're about to enter the checkpoint, aim for the next one
+        if (isGoingToEnterCheckpointSoon(checkpoints)) {
+            targetX = nextCheckpoint.position.x
+            targetY = nextCheckpoint.position.y
+
+            val angleDiff = Math.abs(angleToCheckpoint(nextCheckpoint))
+            System.err.println("BlockerPod: Drifting towards next checkpoint, angle diff: $angleDiff")
+            return
+        }
+
+        // Calculate position delta and future position
+        val positionDelta = Pair(
+            (velocity.first * FRICTION).toInt(),
+            (velocity.second * FRICTION).toInt()
+        )
+        val distanceTravelledOnPreviousFrame = sqrt(
+            positionDelta.first.toDouble().pow(2) + 
+            positionDelta.second.toDouble().pow(2)
+        )
+        val futurePos = Point(posX + positionDelta.first, posY + positionDelta.second)
+
+        // Optimize trajectory using closestPointToLine if we're moving fast enough
+        val angleDiff = Math.abs(angleToCheckpoint(currentCheckpoint))
+        val futureDistance = Point.distanceBetween(
+            futurePos.x, futurePos.y, 
+            currentCheckpoint.position.x, currentCheckpoint.position.y
+        )
+        val currentDistance = Point.distanceBetween(
+            posX, posY, 
+            currentCheckpoint.position.x, currentCheckpoint.position.y
+        )
+
+        if (distanceTravelledOnPreviousFrame > 50 && 
+            angleDiff < 70 && 
+            futureDistance < currentDistance) {
+
+            // Use closestPointToLine to optimize trajectory
+            val currentPos = Point(posX, posY)
+            val aux = Point.closestPointToLine(currentPos, currentCheckpoint.position, futurePos)
+            val aux2 = Point(
+                aux.x + (aux.x - futurePos.x),
+                aux.y + (aux.y - futurePos.y)
+            )
+
+            targetX = aux2.x
+            targetY = aux2.y
+            System.err.println("BlockerPod: Optimizing trajectory using closestPointToLine")
+            return
+        }
+
+        // Default: aim at current checkpoint
         targetX = currentCheckpoint.position.x
         targetY = currentCheckpoint.position.y
     }
@@ -494,8 +718,10 @@ fun main(args : Array<String>) {
         // Strategy for second pod (Blocker/Interceptor)
         val blockerPod = myPods[1] as BlockerPod
 
+        // First calculate normal target (for checkpoint racing)
+        blockerPod.calculateTarget(checkpoints, checkpointCount)
 
-        // Calculate target and thrust for blocker pod
+        // Then override with blocker target if appropriate
         blockerPod.calculateBlockerTarget(leadingOpponent, checkpoints)
 
 
