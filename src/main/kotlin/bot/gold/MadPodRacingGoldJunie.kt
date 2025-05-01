@@ -294,7 +294,7 @@ abstract class MyPod(
     }
 
     // Adjust thrust based on inertia to compensate for pod's momentum
-    protected fun adjustThrustForInertia(baseThrust: Int, angleDiff: Double, targetCheckpoint: Checkpoint): Int {
+    protected fun adjustThrustForInertia(baseThrust: Int, targetCheckpoint: Checkpoint): Int {
         // Get the angle to the checkpoint in radians
         val targetAngle = Point.angleBetween(posX, posY, targetCheckpoint.position.x, targetCheckpoint.position.y) * PI / 180.0
 
@@ -467,9 +467,6 @@ class RacerPod(
         val nextCheckpointIndex = (nextCheckpointId + 1) % checkpointCount
         val nextCheckpoint = checkpoints[nextCheckpointIndex]
 
-        // Calculate the angle between current direction and next checkpoint
-        val currentAngleToCheckpoint = angleToCheckpoint(currentCheckpoint)
-
         // Calculate the angle between current checkpoint and next checkpoint
         val vectorToCurrent = Point(
             currentCheckpoint.position.x - posX,
@@ -551,7 +548,7 @@ class RacerPod(
             }
 
             // Adjust thrust based on inertia
-            thrust = adjustThrustForInertia(baseThrust, angleDiff, currentCheckpoint)
+            thrust = adjustThrustForInertia(baseThrust, currentCheckpoint)
         }
 
         // Decide whether to use boost - never use boost in hairpin turns
@@ -599,9 +596,6 @@ class BlockerPod(
         val currentCheckpoint = checkpoints[nextCheckpointId]
         val nextCheckpointIndex = (nextCheckpointId + 1) % checkpointCount
         val nextCheckpoint = checkpoints[nextCheckpointIndex]
-
-        // Calculate the angle between current direction and next checkpoint
-        val currentAngleToCheckpoint = angleToCheckpoint(currentCheckpoint)
 
         // Calculate the angle between current checkpoint and next checkpoint
         val vectorToCurrent = Point(
@@ -825,7 +819,7 @@ class OpponentPod(
     }
 }
 
-fun main(args : Array<String>) {
+fun main() {
     val input = Scanner(System.`in`)
     val laps = input.nextInt()
     val checkpointCount = input.nextInt()
