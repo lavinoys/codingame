@@ -22,35 +22,8 @@ enum class CellType {
  * 메인 함수
  */
 fun main(args : Array<String>) {
-    // 테스트 모드인지 확인
-    val isTestMode = args.isNotEmpty() && args[0] == "test"
-
-    if (isTestMode) {
-        // 예제 입력
-        val exampleInput = """
-            5 6
-            #####
-            #S#E#
-            #_#_#
-            #_#_#
-            #___#
-            #####
-        """.trimIndent()
-
-        // 표준 입력 리다이렉션
-        val originalIn = System.`in`
-        val inputStream = ByteArrayInputStream(exampleInput.toByteArray())
-        System.setIn(inputStream)
-
-        // 솔루션 실행
-        solveMaze(Scanner(System.`in`))
-
-        // 표준 입력 복원
-        System.setIn(originalIn)
-    } else {
-        // 일반 모드일 경우 표준 입력에서 읽기
-        solveMaze(Scanner(System.`in`))
-    }
+    // 표준 입력에서 읽기
+    solveMaze(Scanner(System.`in`))
 }
 
 /**

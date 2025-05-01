@@ -101,15 +101,21 @@ class HexagonalMazeTest {
 
     @Test
     fun testMainFunctionInTestMode() {
+        // 표준 입력 리다이렉션
+        val originalIn = System.`in`
+        val inputStream = ByteArrayInputStream(testInputContent.toByteArray())
+        System.setIn(inputStream)
+
         // 표준 출력 캡처
         val originalOut = System.out
         val outputStream = ByteArrayOutputStream()
         System.setOut(PrintStream(outputStream))
 
-        // 테스트 모드로 메인 함수 실행
-        main(arrayOf("test"))
+        // 테스트 모드에서는 직접 solveMaze 함수 호출
+        solveMaze(Scanner(inputStream))
 
-        // 표준 출력 복원
+        // 표준 입력 및 출력 복원
+        System.setIn(originalIn)
         System.setOut(originalOut)
 
         // 출력 확인
