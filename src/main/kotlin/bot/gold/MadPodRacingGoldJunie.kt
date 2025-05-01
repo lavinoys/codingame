@@ -63,24 +63,6 @@ open class BasePod(
     }
 
 
-    // Predict the actual velocity after applying thrust, considering inertia
-    fun predictActualVelocity(targetAngle: Double, thrust: Int): Pair<Double, Double> {
-        // Use the fixed inertia value
-        val inertia = 0.85
-
-        // Convert angle to radians
-        val angleRad = targetAngle * PI / 180.0
-
-        // Calculate thrust components
-        val thrustX = thrust * cos(angleRad)
-        val thrustY = thrust * sin(angleRad)
-
-        // Calculate new velocity components with inertia
-        val newVx = velocity.first * inertia + thrustX * (1 - inertia)
-        val newVy = velocity.second * inertia + thrustY * (1 - inertia)
-
-        return Pair(newVx, newVy)
-    }
 }
 
 // Abstract base class for player-controlled pods
