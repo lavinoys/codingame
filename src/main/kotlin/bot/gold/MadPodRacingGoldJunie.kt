@@ -377,6 +377,10 @@ class BlockerPod(
     }
 
     fun calculateBlockerTarget(leadingOpponent: OpponentPod, checkpoints: List<Checkpoint>, blockOpponent: Boolean) {
+        // Reset flags
+        useShield = false
+        useBoost = false
+
         if (blockOpponent) {
             // Aim to intercept the leading opponent - use direct coordinates
             targetX = leadingOpponent.posX + leadingOpponent.velocity.first
