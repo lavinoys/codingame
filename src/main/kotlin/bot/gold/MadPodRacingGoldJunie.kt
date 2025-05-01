@@ -679,10 +679,31 @@ class BlockerPod(
     // Using isHairpinTurn from parent class
 
     // Function to handle the logic for targeting the second checkpoint when there are 4 or fewer checkpoints
-    private fun targetSecondCheckpoint(checkpoints: List<Checkpoint>, checkpointCount: Int) {
+    private fun targetSecondCheckpoint(checkpoints: List<Checkpoint>, checkpointCount: Int, opponentPods: List<OpponentPod>) {
         // Get the second checkpoint (index 1)
         val secondCheckpointIndex = 1 % checkpointCount  // Use modulo to handle case where there are fewer than 2 checkpoints
         val secondCheckpoint = checkpoints[secondCheckpointIndex]
+
+        // Check if any opponent pod is approaching the second checkpoint
+        val approachingOpponent = opponentPods.firstOrNull { opponentPod ->
+            // Check if the opponent is heading towards the second checkpoint and is close enough
+            opponentPod.nextCheckpointId == secondCheckpointIndex && 
+            Point.distanceBetween(
+                opponentPod.posX, opponentPod.posY,
+                secondCheckpoint.position.x, secondCheckpoint.position.y
+            ) < 2000
+        }
+
+        // If an opponent is approaching the second checkpoint, rush towards it
+        if (approachingOpponent != null) {
+            System.err.println("BLOCKER: Enemy pod approaching second checkpoint! Rushing towards it!")
+            // Set target directly to the opponent pod's position
+            targetX = approachingOpponent.posX
+            targetY = approachingOpponent.posY
+            // Use maximum thrust to rush towards the opponent
+            thrust = 100
+            return
+        }
 
         // If the pod is at the exact x,y position of the checkpoint, activate shield
         if (isAtExactCheckpointPosition(secondCheckpoint)) {
@@ -774,7 +795,7 @@ class BlockerPod(
     // BlockerPod uses the default implementations of calculateTarget and calculateThrust from MyPod
     // The actual blocking logic is implemented in calculateBlockerStrategy
 
-    fun calculateBlockerStrategy(leadingOpponent: OpponentPod, racerPod: RacerPod, checkpoints: List<Checkpoint>, checkpointCount: Int) {
+    fun calculateBlockerStrategy(leadingOpponent: OpponentPod, racerPod: RacerPod, checkpoints: List<Checkpoint>, checkpointCount: Int, opponentPods: List<OpponentPod> = listOf(leadingOpponent)) {
         // Reset flags
         if (shieldActive == 0) {  // Only reset if shield is not active
             useShield = false
@@ -783,7 +804,7 @@ class BlockerPod(
 
         // Special case: If there are 4 or fewer checkpoints, target the second checkpoint
         if (checkpointCount <= 4) {
-            targetSecondCheckpoint(checkpoints, checkpointCount)
+            targetSecondCheckpoint(checkpoints, checkpointCount, opponentPods)
             return
         }
 
@@ -960,7 +981,7 @@ fun main() {
         val blockerPod = myPods[1] as BlockerPod
 
         // BlockerPod only focuses on blocking opponents, not checkpoint racing
-        blockerPod.calculateBlockerStrategy(leadingOpponent, racerPod, checkpoints, checkpointCount)
+        blockerPod.calculateBlockerStrategy(leadingOpponent, racerPod, checkpoints, checkpointCount, opponentPods)
 
 
         // Output commands for both pods
