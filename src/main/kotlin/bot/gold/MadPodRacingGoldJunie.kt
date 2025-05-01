@@ -96,7 +96,7 @@ open class BasePod(
         var approxPosition = Point(posX, posY)
 
         // Simulate movement for the next 6 turns
-        for (i in 0 until 6) {
+        (0 until 6).forEach { _ ->
             // Apply friction to velocity
             velocity = Pair(
                 (velocity.first * FRICTION).toInt(),
@@ -111,10 +111,10 @@ open class BasePod(
 
             // Check if pod is inside checkpoint
             if (Point.isInsideCircle(
-                    approxPosition.x, 
-                    approxPosition.y, 
-                    currentCheckpoint.position.x, 
-                    currentCheckpoint.position.y, 
+                    approxPosition.x,
+                    approxPosition.y,
+                    currentCheckpoint.position.x,
+                    currentCheckpoint.position.y,
                     CHECKPOINT_RADIUS
                 )) {
                 return true
