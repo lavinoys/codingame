@@ -4,7 +4,36 @@ import kotlin.math.*
 /**
  * 매드 포드 레이싱 골드 리그 구현
  * MadPodRacingGold.md의 규칙과 전략을 기반으로 함
+ * 
+ * 클린 아키텍처 원칙에 따라 구성됨:
+ * 1. 엔티티 계층 (Entity Layer): 핵심 비즈니스 규칙과 데이터 구조
+ *    - 게임의 기본 객체(Point, Checkpoint, BasePod 등)와 그들의 관계를 정의
+ *    - 다른 계층에 의존하지 않는 독립적인 객체들
+ * 
+ * 2. 유스케이스 계층 (Use Case Layer): 애플리케이션 특화 비즈니스 규칙
+ *    - 엔티티를 조작하는 비즈니스 로직(충돌 예측, 체크포인트 진입 예측 등)
+ *    - 확장 함수를 통해 엔티티의 기능을 확장하여 관심사 분리
+ * 
+ * 3. 인터페이스 어댑터 계층 (Interface Adapters Layer): 외부 시스템과의 통신 변환
+ *    - 유스케이스와 엔티티를 외부 프레임워크와 연결하는 어댑터
+ *    - 데이터 변환 및 포맷팅 담당
+ * 
+ * 4. 프레임워크 및 드라이버 계층 (Frameworks & Drivers Layer): 외부 프레임워크와의 통합
+ *    - 입출력, 외부 라이브러리와의 상호작용
+ *    - 메인 함수와 게임 루프 포함
+ * 
+ * 이 구조는 다음과 같은 이점을 제공합니다:
+ * - 관심사 분리: 각 계층은 특정 책임만 가짐
+ * - 테스트 용이성: 비즈니스 로직을 외부 의존성과 분리하여 테스트 가능
+ * - 유지보수성: 코드 변경이 다른 부분에 미치는 영향 최소화
+ * - 확장성: 새로운 기능 추가가 용이함
  */
+
+//================================================================
+// 1. 엔티티 계층 (Entity Layer)
+//================================================================
+// 이 계층은 핵심 비즈니스 규칙과 데이터 구조를 포함합니다.
+// 다른 계층에 의존하지 않는 독립적인 객체들로 구성됩니다.
 
 // 애플리케이션 전체에서 공유되는 상수
 object GameConstants {
@@ -139,7 +168,7 @@ open class BasePod(
     }
 
     // 위치가 체크포인트 내부에 있는지 확인
-    protected fun isPodInsideCheckpoint(x: Int, y: Int, checkpoint: Checkpoint): Boolean {
+    fun isPodInsideCheckpoint(x: Int, y: Int, checkpoint: Checkpoint): Boolean {
         return Point.isInsideCircle(
             x,
             y,
@@ -162,29 +191,8 @@ open class BasePod(
 
     // 포드가 다음 몇 턴 안에 체크포인트에 들어갈지 예측
     fun isGoingToEnterCheckpointSoon(checkpoints: List<Checkpoint>): Boolean {
-        val currentCheckpoint = checkpoints[nextCheckpointId]
-        var velocityX = this.velocityX
-        var velocityY = this.velocityY
-        var approxPositionX = posX
-        var approxPositionY = posY
-
-        // 다음 6턴 동안의 움직임 시뮬레이션
-        repeat(6) {
-            // 속도에 마찰 적용
-            velocityX = (velocityX * GameConstants.FRICTION).toInt()
-            velocityY = (velocityY * GameConstants.FRICTION).toInt()
-
-            // 속도를 기반으로 위치 업데이트
-            approxPositionX += velocityX
-            approxPositionY += velocityY
-
-            // 포드가 체크포인트 내부에 있는지 확인
-            if (isPodInsideCheckpoint(approxPositionX, approxPositionY, currentCheckpoint)) {
-                return true
-            }
-        }
-
-        return false
+        // 유스케이스 계층의 확장 함수 호출
+        return this.predictCheckpointEntry(checkpoints)
     }
 
     open fun update(x: Int, y: Int, vx: Int, vy: Int, angle: Int, nextCheckpointId: Int) {
@@ -229,8 +237,8 @@ abstract class MyPod(
     val collisionTimeThreshold = 3 // Number of turns to look ahead for collision prediction
     val collisionProbabilityThreshold = 0.7 // Probability threshold to activate shield
 
-    // Calculate dynamic collision radius based on relative speed
-    protected fun calculateDynamicCollisionRadius(relativeSpeed: Double): Int {
+    // 상대 속도에 기반한 동적 충돌 반경 계산
+    fun calculateDynamicCollisionRadius(relativeSpeed: Double): Int {
         return collisionRadius + (relativeSpeed * 0.5).toInt().coerceAtMost(GameConstants.POD_SIZE.toInt())
     }
 
@@ -366,144 +374,50 @@ abstract class MyPod(
         }
     }
 
-    // Predict collision with any pod
+    // 다른 포드와의 충돌 예측
     protected fun predictCollision(otherPod: BasePod): Pair<Double, Double> {
-        // Calculate relative position and velocity
-        val relativeX = otherPod.posX - posX
-        val relativeY = otherPod.posY - posY
-        val relativeVX = otherPod.velocityX - velocityX
-        val relativeVY = otherPod.velocityY - velocityY
-
-        // Calculate relative speed using VectorUtils
-        val relativeSpeed = getRelativeSpeed(otherPod)
-
-        // Make collision radius dynamic based on relative speed
-        // Higher speeds need larger collision radius to account for movement between turns
-        val dynamicCollisionRadius = calculateDynamicCollisionRadius(relativeSpeed)
-
-        // Calculate quadratic equation coefficients for collision time
-        // ||p + vt|| = r, where p is relative position, v is relative velocity, r is collision radius
-
-        // Coefficient a = |v|²
-        val a = VectorUtils.magnitude(relativeVX, relativeVY).pow(2)
-
-        // Coefficient b = 2(p·v)
-        val b = 2.0 * VectorUtils.dotProduct(
-            relativeX.toDouble(), relativeY.toDouble(),
-            relativeVX.toDouble(), relativeVY.toDouble()
-        )
-
-        // Coefficient c = |p|² - r²
-        val c = VectorUtils.squaredDistance(0, 0, relativeX, relativeY) - 
-                dynamicCollisionRadius.toDouble() * dynamicCollisionRadius.toDouble()
-
-        // If pods are not moving relative to each other
-        if (a < 0.0001) {
-            // If already colliding
-            if (c <= 0) {
-                return Pair(0.0, 1.0) // Immediate collision with 100% probability
-            }
-            return Pair(Double.MAX_VALUE, 0.0) // No collision
-        }
-
-        // Calculate discriminant
-        val discriminant = b * b - 4 * a * c
-
-        // No real solutions, no collision
-        if (discriminant < 0) {
-            return Pair(Double.MAX_VALUE, 0.0)
-        }
-
-        // Calculate collision times
-        val t1 = (-b - sqrt(discriminant)) / (2 * a)
-        val t2 = (-b + sqrt(discriminant)) / (2 * a)
-
-        // Find the earliest positive collision time
-        val collisionTime = when {
-            t1 > 0 -> t1
-            t2 > 0 -> t2
-            else -> Double.MAX_VALUE // No future collision
-        }
-
-        // Calculate collision probability based on time
-        val probability = if (collisionTime < Double.MAX_VALUE) {
-            // Higher probability for closer collisions, lower for farther ones
-            (1.0 - (collisionTime / collisionTimeThreshold).coerceAtMost(1.0))
-        } else {
-            0.0
-        }
-
-        return Pair(collisionTime, probability)
+        // 유스케이스 계층의 확장 함수 호출
+        return this.calculateCollisionProbability(otherPod)
     }
 
-    // Check if we should activate shield based on collision prediction
+    // 충돌 예측에 기반하여 쉴드 활성화 여부 확인
     protected fun shouldActivateShield(opponentPods: List<OpponentPod>): Boolean {
-        // If shield is on cooldown, we can't use it
-        if (shieldCooldown > 0) {
-            return false
-        }
-
-        // Check collision with each opponent pod
-        for (opponentPod in opponentPods) {
-            val (collisionTime, probability) = predictCollision(opponentPod)
-
-            // Log collision prediction data for debugging
-            if (collisionTime < 5) {  // Only log if collision is within 5 turns
-                val squaredDistance = Point.squaredDistanceBetween(posX, posY, opponentPod.posX, opponentPod.posY)
-                val distance = sqrt(squaredDistance)  // Only calculate actual distance for logging
-                val relativeSpeed = getRelativeSpeed(opponentPod)
-                val dynamicRadius = calculateDynamicCollisionRadius(relativeSpeed)
-                System.err.println("Collision prediction: Time=$collisionTime, Prob=$probability, Dist=$distance, RelSpeed=$relativeSpeed, Radius=$dynamicRadius")
-            }
-
-            // If collision is imminent and probable
-            if (collisionTime < collisionTimeThreshold && probability > collisionProbabilityThreshold) {
-                // Get relative speed to determine impact force
-                val relativeSpeed = getRelativeSpeed(opponentPod)
-
-                // Only activate shield for high-impact collisions
-                if (relativeSpeed > 300) {
-                    System.err.println("Shield activated! Collision predicted in $collisionTime turns with probability $probability, speed: $relativeSpeed")
-                    return true
-                }
-            }
-        }
-
-        return false
+        // 유스케이스 계층의 확장 함수 호출
+        return this.evaluateShieldActivation(opponentPods)
     }
 
-    // Methods that can be overridden by subclasses
+    // 서브클래스에서 오버라이드할 수 있는 메서드
     open fun calculateTarget(checkpoints: List<Checkpoint>, checkpointCount: Int) {
-        // Default implementation - does nothing
-        // Subclasses should override this method if they need to calculate targets
-        System.err.println("MyPod: Default calculateTarget implementation")
+        // 기본 구현 - 아무것도 하지 않음
+        // 서브클래스는 타겟 계산이 필요한 경우 이 메서드를 오버라이드해야 함
+        System.err.println("MyPod: 기본 calculateTarget 구현")
     }
 
     open fun calculateThrust(checkpoints: List<Checkpoint>, turn: Int, opponentPods: List<OpponentPod>, sharedBoostAvailable: Boolean) {
-        // Default implementation - does nothing
-        // Subclasses should override this method if they need to calculate thrust
-        System.err.println("MyPod: Default calculateThrust implementation")
+        // 기본 구현 - 아무것도 하지 않음
+        // 서브클래스는 추진력 계산이 필요한 경우 이 메서드를 오버라이드해야 함
+        System.err.println("MyPod: 기본 calculateThrust 구현")
     }
 
-    // Calculate a target point ahead of the checkpoint based on inertia
+    // 관성에 기반하여 체크포인트 앞의 목표 지점 계산
     protected fun calculateInertiaAdjustedTarget(checkpoint: Checkpoint): Pair<Int, Int> {
-        // Get the current speed and velocity
+        // 현재 속도 가져오기
         val currentSpeed = getCurrentSpeed()
 
-        // Only apply inertia correction if we're moving fast enough
+        // 충분히 빠르게 움직이는 경우에만 관성 보정 적용
         if (currentSpeed < 100) {
             return Pair(checkpoint.position.x, checkpoint.position.y)
         }
 
-        // Calculate how far ahead to aim based on speed
-        // Higher speeds need to aim further ahead
+        // 속도에 기반하여 얼마나 앞을 목표로 할지 계산
+        // 높은 속도는 더 앞을 목표로 해야 함
         val lookAheadFactor = (currentSpeed / 100.0).coerceAtMost(3.0)
 
-        // Calculate the normalized direction vector of our velocity using VectorUtils
+        // VectorUtils를 사용하여 속도의 정규화된 방향 벡터 계산
         val velocityMagnitude = VectorUtils.magnitude(velocityX, velocityY)
 
-        // Calculate normalized velocity direction components
-        // Avoid creating a Pair object for better performance
+        // 정규화된 속도 방향 구성 요소 계산
+        // 성능 향상을 위해 Pair 객체 생성 방지
         val velocityDirX: Double
         val velocityDirY: Double
 
@@ -515,77 +429,77 @@ abstract class MyPod(
             velocityDirY = 0.0
         }
 
-        // Calculate the target point ahead of the checkpoint
+        // 체크포인트 앞의 목표 지점 계산
         val targetX = (checkpoint.position.x + velocityDirX * lookAheadFactor * GameConstants.CHECKPOINT_RADIUS).toInt()
         val targetY = (checkpoint.position.y + velocityDirY * lookAheadFactor * GameConstants.CHECKPOINT_RADIUS).toInt()
 
-        // We still need to return a Pair here, but we only create one Pair object
-        // instead of creating temporary Pairs during the calculation
+        // 여기서는 Pair를 반환해야 하지만, 계산 중에 임시 Pair를 생성하는 대신
+        // 하나의 Pair 객체만 생성
         return Pair(targetX, targetY)
     }
 
-    // Adjust thrust based on inertia to compensate for pod's momentum
+    // 포드의 관성을 보상하기 위해 관성에 기반한 추진력 조정
     protected fun adjustThrustForInertia(baseThrust: Int, targetCheckpoint: Checkpoint): Int {
-        // Get the angle to the checkpoint in radians
+        // 라디안 단위로 체크포인트까지의 각도 가져오기
         val targetAngleRadians = Point.angleBetween(posX, posY, targetCheckpoint.position.x, targetCheckpoint.position.y) * PI / 180.0
 
-        // Get the current speed
+        // 현재 속도 가져오기
         val currentSpeed = getCurrentSpeed()
 
-        // Calculate the direction vector towards the checkpoint
+        // 체크포인트를 향한 방향 벡터 계산
         val directionX = cos(targetAngleRadians)
         val directionY = sin(targetAngleRadians)
 
-        // Calculate the dot product to determine if we're moving in the right direction
+        // 올바른 방향으로 움직이고 있는지 확인하기 위한 내적 계산
         val dotProduct = calculateVelocityDirectionDotProduct(directionX, directionY)
         val movingTowardsTarget = dotProduct > 0
 
-        // Adjust thrust based on inertia and current movement
+        // 관성과 현재 움직임에 기반한 추진력 조정
         return when {
-            // If we're moving fast and in the wrong direction, reduce thrust to allow for turning
+            // 빠르게 움직이고 있고 잘못된 방향으로 가고 있다면, 회전을 위해 추진력 감소
             currentSpeed > 200 && !movingTowardsTarget -> (baseThrust * 0.7).toInt()
 
-            // If we're moving fast and in the right direction, maintain thrust
+            // 빠르게 움직이고 있고 올바른 방향으로 가고 있다면, 추진력 유지
             currentSpeed > 200 && movingTowardsTarget -> baseThrust
 
-            // If we're moving slowly, increase thrust to overcome inertia
+            // 천천히 움직이고 있다면, 관성을 극복하기 위해 추진력 증가
             currentSpeed < 100 -> (baseThrust * 1.2).coerceAtMost(100.0).toInt()
 
-            // Default case
+            // 기본 케이스
             else -> baseThrust
         }
     }
 
-    // Log information for debugging
+    // 디버깅을 위한 관성 정보 로깅
     protected fun logInertiaInfo(podType: String) {
         val speed = getCurrentSpeed()
 
-        System.err.println("Pod $podType - " +
-                "Speed: $speed, " +
-                "Velocity: (${velocityX}, ${velocityY}), " +
-                "Thrust: $thrust")
+        System.err.println("포드 $podType - " +
+                "속도: $speed, " +
+                "벡터: (${velocityX}, ${velocityY}), " +
+                "추진력: $thrust")
     }
 
-    // Handle hairpin turn logic and return the appropriate thrust
+    // 헤어핀 턴 로직을 처리하고 적절한 추진력 반환
     protected fun handleHairpinTurn(angleDiff: Double, podType: String): Int {
-        // If we're in a sharp turn and the angle is large, turn off the engine
+        // 급격한 턴에서 각도가 크면 엔진을 끔
         if (angleDiff > GameConstants.HAIRPIN_HIGH_ANGLE) {
-            System.err.println("$podType: Hairpin turn: Engine off, rotating only. Angle diff: $angleDiff")
+            System.err.println("$podType: 헤어핀 턴: 엔진 꺼짐, 회전만. 각도 차이: $angleDiff")
             return GameConstants.HAIRPIN_LOW_THRUST
         } 
-        // Once we've rotated enough, gradually increase thrust
+        // 충분히 회전했으면 점진적으로 추진력 증가
         else if (angleDiff > GameConstants.HAIRPIN_MID_ANGLE) {
-            System.err.println("$podType: Hairpin turn: Minimal thrust during turn. Angle diff: $angleDiff")
+            System.err.println("$podType: 헤어핀 턴: 턴 중 최소 추진력. 각도 차이: $angleDiff")
             return GameConstants.HAIRPIN_MID_THRUST
         }
-        // When angle is good enough, resume normal thrust
+        // 각도가 충분히 좋으면 정상 추진력 재개
         else {
-            System.err.println("$podType: Hairpin turn: Resuming thrust. Angle diff: $angleDiff")
+            System.err.println("$podType: 헤어핀 턴: 추진력 재개. 각도 차이: $angleDiff")
             return GameConstants.HAIRPIN_HIGH_THRUST
         }
     }
 
-    // Calculate base thrust based on angle and distance
+    // 각도와 거리에 기반한 기본 추진력 계산
     protected fun calculateBaseThrust(angleDiff: Double, squaredDistance: Double): Int {
         return when {
             angleDiff > 90 -> 0
@@ -884,6 +798,148 @@ class OpponentPod(
     }
 }
 
+//================================================================
+// 2. 유스케이스 계층 (Use Case Layer)
+//================================================================
+// 이 계층은 애플리케이션 특화 비즈니스 규칙을 포함합니다.
+// 엔티티 계층의 객체들을 조작하고 비즈니스 로직을 구현합니다.
+
+/**
+ * 포드 움직임 예측 및 충돌 감지 기능
+ */
+// BasePod 클래스에 확장 메서드로 추가
+fun BasePod.predictCheckpointEntry(checkpoints: List<Checkpoint>): Boolean {
+    val currentCheckpoint = checkpoints[nextCheckpointId]
+    var velocityX = this.velocityX
+    var velocityY = this.velocityY
+    var approxPositionX = posX
+    var approxPositionY = posY
+
+    // 다음 6턴 동안의 움직임 시뮬레이션
+    repeat(6) {
+        // 속도에 마찰 적용
+        velocityX = (velocityX * GameConstants.FRICTION).toInt()
+        velocityY = (velocityY * GameConstants.FRICTION).toInt()
+
+        // 속도를 기반으로 위치 업데이트
+        approxPositionX += velocityX
+        approxPositionY += velocityY
+
+        // 포드가 체크포인트 내부에 있는지 확인
+        if (isPodInsideCheckpoint(approxPositionX, approxPositionY, currentCheckpoint)) {
+            return true
+        }
+    }
+
+    return false
+}
+
+// MyPod 클래스에 확장 메서드로 추가
+fun MyPod.calculateCollisionProbability(otherPod: BasePod): Pair<Double, Double> {
+    // 상대적 위치와 속도 계산
+    val relativeX = otherPod.posX - posX
+    val relativeY = otherPod.posY - posY
+    val relativeVX = otherPod.velocityX - velocityX
+    val relativeVY = otherPod.velocityY - velocityY
+
+    // VectorUtils를 사용하여 상대 속도 계산
+    val relativeSpeed = getRelativeSpeed(otherPod)
+
+    // 상대 속도에 기반한 동적 충돌 반경 설정
+    // 높은 속도는 턴 사이의 움직임을 고려하기 위해 더 큰 충돌 반경 필요
+    val dynamicCollisionRadius = calculateDynamicCollisionRadius(relativeSpeed)
+
+    // 충돌 시간에 대한 이차 방정식 계수 계산
+    // ||p + vt|| = r, 여기서 p는 상대 위치, v는 상대 속도, r은 충돌 반경
+
+    // 계수 a = |v|²
+    val a = VectorUtils.magnitude(relativeVX, relativeVY).pow(2)
+
+    // 계수 b = 2(p·v)
+    val b = 2.0 * VectorUtils.dotProduct(
+        relativeX.toDouble(), relativeY.toDouble(),
+        relativeVX.toDouble(), relativeVY.toDouble()
+    )
+
+    // 계수 c = |p|² - r²
+    val c = VectorUtils.squaredDistance(0, 0, relativeX, relativeY) - 
+            dynamicCollisionRadius.toDouble() * dynamicCollisionRadius.toDouble()
+
+    // 포드가 서로에 대해 상대적으로 움직이지 않는 경우
+    if (a < 0.0001) {
+        // 이미 충돌 중인 경우
+        if (c <= 0) {
+            return Pair(0.0, 1.0) // 100% 확률로 즉시 충돌
+        }
+        return Pair(Double.MAX_VALUE, 0.0) // 충돌 없음
+    }
+
+    // 판별식 계산
+    val discriminant = b * b - 4 * a * c
+
+    // 실수 해가 없으면 충돌 없음
+    if (discriminant < 0) {
+        return Pair(Double.MAX_VALUE, 0.0)
+    }
+
+    // 충돌 시간 계산
+    val t1 = (-b - sqrt(discriminant)) / (2 * a)
+    val t2 = (-b + sqrt(discriminant)) / (2 * a)
+
+    // 가장 빠른 양수 충돌 시간 찾기
+    val collisionTime = when {
+        t1 > 0 -> t1
+        t2 > 0 -> t2
+        else -> Double.MAX_VALUE // 미래 충돌 없음
+    }
+
+    // 시간에 기반한 충돌 확률 계산
+    val probability = if (collisionTime < Double.MAX_VALUE) {
+        // 가까운 충돌은 높은 확률, 먼 충돌은 낮은 확률
+        (1.0 - (collisionTime / collisionTimeThreshold).coerceAtMost(1.0))
+    } else {
+        0.0
+    }
+
+    return Pair(collisionTime, probability)
+}
+
+// MyPod 클래스에 확장 메서드로 추가
+fun MyPod.evaluateShieldActivation(opponentPods: List<OpponentPod>): Boolean {
+    // 쉴드가 쿨다운 중이면 사용할 수 없음
+    if (shieldCooldown > 0) {
+        return false
+    }
+
+    // 각 상대 포드와의 충돌 확인
+    for (opponentPod in opponentPods) {
+        val (collisionTime, probability) = calculateCollisionProbability(opponentPod)
+
+        // 디버깅을 위한 충돌 예측 데이터 로깅
+        if (collisionTime < 5) {  // 충돌이 5턴 이내인 경우에만 로깅
+            val squaredDistance = Point.squaredDistanceBetween(posX, posY, opponentPod.posX, opponentPod.posY)
+            val distance = sqrt(squaredDistance)  // 로깅을 위해서만 실제 거리 계산
+            val relativeSpeed = getRelativeSpeed(opponentPod)
+            val dynamicRadius = calculateDynamicCollisionRadius(relativeSpeed)
+            System.err.println("충돌 예측: 시간=$collisionTime, 확률=$probability, 거리=$distance, 상대속도=$relativeSpeed, 반경=$dynamicRadius")
+        }
+
+        // 충돌이 임박하고 확률이 높은 경우
+        if (collisionTime < collisionTimeThreshold && probability > collisionProbabilityThreshold) {
+            // 충격력을 결정하기 위한 상대 속도 확인
+            val relativeSpeed = getRelativeSpeed(opponentPod)
+
+            // 고충격 충돌에 대해서만 쉴드 활성화
+            if (relativeSpeed > 300) {
+                System.err.println("쉴드 활성화! $collisionTime 턴 내 충돌 예측, 확률: $probability, 속도: $relativeSpeed")
+                return true
+            }
+        }
+    }
+
+    return false
+}
+
 /**
  * 가장 진행이 많이 된 상대 포드의 인덱스를 찾습니다.
  * 진행 상황은 완료된 랩 수와 체크포인트 ID로 결정됩니다.
@@ -893,6 +949,18 @@ fun findLeadingOpponentIndex(opponentPods: List<OpponentPod>): Int {
               (opponentPods[0].laps == opponentPods[1].laps && 
                opponentPods[0].nextCheckpointId > opponentPods[1].nextCheckpointId)) 0 else 1
 }
+
+//================================================================
+// 3. 인터페이스 어댑터 계층 (Interface Adapters Layer)
+//================================================================
+// 이 계층은 외부 시스템과의 통신을 변환하는 역할을 합니다.
+// 유스케이스와 엔티티를 외부 프레임워크와 연결합니다.
+
+//================================================================
+// 4. 프레임워크 및 드라이버 계층 (Frameworks & Drivers Layer)
+//================================================================
+// 이 계층은 외부 프레임워크와의 통합을 담당합니다.
+// 입출력, 데이터베이스, 웹 등의 외부 시스템과 상호작용합니다.
 
 /**
  * 게임 상태를 초기화하고 게임 루프를 실행하는 메인 함수입니다.
