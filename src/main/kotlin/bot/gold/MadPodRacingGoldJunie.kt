@@ -608,6 +608,70 @@ class BlockerPod(
         super.update(x, y, vx, vy, angle, nextCheckpointId)
     }
 
+    // Check if the pod is currently inside a checkpoint
+    private fun isInsideCheckpoint(checkpoint: Checkpoint): Boolean {
+        return Point.isInsideCircle(
+            posX,
+            posY,
+            checkpoint.position.x,
+            checkpoint.position.y,
+            CHECKPOINT_RADIUS
+        )
+    }
+
+    // Function to handle the logic for targeting the second checkpoint when there are 4 or fewer checkpoints
+    private fun targetSecondCheckpoint(checkpoints: List<Checkpoint>, checkpointCount: Int) {
+        // Get the second checkpoint (index 1)
+        val secondCheckpointIndex = 1 % checkpointCount  // Use modulo to handle case where there are fewer than 2 checkpoints
+        val secondCheckpoint = checkpoints[secondCheckpointIndex]
+
+        // If the pod is inside the checkpoint, set thrust to 0 to "camp" there
+        if (isInsideCheckpoint(secondCheckpoint)) {
+            // Set target to exact coordinates of the checkpoint when camping
+            targetX = secondCheckpoint.position.x
+            targetY = secondCheckpoint.position.y
+            thrust = 0
+            System.err.println("BLOCKER: Camping at second checkpoint (checkpointCount=$checkpointCount)")
+        } else {
+            // Calculate the current speed
+            val currentSpeed = getCurrentSpeed()
+
+            // Calculate the distance to the checkpoint
+            val distanceToCheckpoint = sqrt(squaredDistanceToCheckpoint(secondCheckpoint))
+
+            // Calculate the angle to the checkpoint
+            val angleDiff = Math.abs(angleToCheckpoint(secondCheckpoint))
+
+            // Adjust target position based on inertia
+            val (adjustedX, adjustedY) = calculateInertiaAdjustedTarget(secondCheckpoint)
+            targetX = adjustedX
+            targetY = adjustedY
+
+            // Adjust thrust based on distance, angle, and inertia
+            val baseThrust = when {
+                // If we're far from the checkpoint and facing it, use full thrust
+                distanceToCheckpoint > 3000 && angleDiff < 30 -> 100
+
+                // If we're at a medium distance, adjust thrust based on angle
+                distanceToCheckpoint > 1500 -> when {
+                    angleDiff > 90 -> 0  // If we're facing away, stop to turn
+                    angleDiff > 45 -> 50 // If we're at a significant angle, use medium thrust
+                    else -> 100          // Otherwise, full thrust
+                }
+
+                // If we're close to the checkpoint, reduce thrust to avoid overshooting
+                else -> when {
+                    angleDiff > 45 -> 0  // If we're at a significant angle, stop to turn
+                    else -> 70           // Otherwise, use reduced thrust for precision
+                }
+            }
+
+            // Apply inertia correction to thrust
+            thrust = adjustThrustForInertia(baseThrust, secondCheckpoint)
+
+            System.err.println("BLOCKER: Moving to second checkpoint - Distance: $distanceToCheckpoint, Angle: $angleDiff, Thrust: $thrust")
+        }
+    }
 
     // BlockerPod uses the default implementations of calculateTarget and calculateThrust from MyPod
     // The actual blocking logic is implemented in calculateBlockerTarget
@@ -621,15 +685,7 @@ class BlockerPod(
 
         // Special case: If there are 4 or fewer checkpoints, target the second checkpoint
         if (checkpointCount <= 4) {
-            // Get the second checkpoint (index 1)
-            val secondCheckpointIndex = 1 % checkpointCount  // Use modulo to handle case where there are fewer than 2 checkpoints
-            val secondCheckpoint = checkpoints[secondCheckpointIndex]
-
-            targetX = secondCheckpoint.position.x
-            targetY = secondCheckpoint.position.y
-            thrust = 100
-
-            System.err.println("BLOCKER: Targeting second checkpoint due to small track (checkpointCount=$checkpointCount)")
+            targetSecondCheckpoint(checkpoints, checkpointCount)
             return
         }
 
