@@ -180,13 +180,15 @@ open class BasePod(
         // Update position coordinates directly
         posX = x
         posY = y
-        // Update Point object only once
+        // Update Point object in-place by modifying its fields if possible
+        // Since Point is immutable, we need to create a new one, but we could optimize this
+        // by making Point mutable or using a different approach in a future refactoring
         position = Point(x, y)
         // Update velocity components directly
         velocityX = vx
         velocityY = vy
         // Update velocity Pair for backward compatibility
-        velocity = Pair(vx, vy)
+        // We don't create a new Pair object here because the getter already does that
         this.angle = angle
         this.nextCheckpointId = nextCheckpointId
     }
@@ -247,6 +249,8 @@ abstract class MyPod(
 
             // We need to create Point objects for the closestPointToLine calculation
             // since it's a complex geometric operation
+            // Note: This is a performance bottleneck that could be optimized in the future
+            // by implementing closestPointToLine to work with raw coordinates instead of Point objects
             val currentPosition = Point(posX, posY)
             val futurePosition = Point(futurePositionX, futurePositionY)
             val closestPoint = Point.closestPointToLine(currentPosition, checkpoint.position, futurePosition)
@@ -463,16 +467,26 @@ abstract class MyPod(
 
         // Calculate the normalized direction vector of our velocity using VectorUtils
         val velocityMagnitude = VectorUtils.magnitude(velocityX, velocityY)
-        val (velocityDirX, velocityDirY) = if (velocityMagnitude > 0.001) {
-            Pair(velocityX / velocityMagnitude, velocityY / velocityMagnitude)
+
+        // Calculate normalized velocity direction components
+        // Avoid creating a Pair object for better performance
+        val velocityDirX: Double
+        val velocityDirY: Double
+
+        if (velocityMagnitude > 0.001) {
+            velocityDirX = velocityX / velocityMagnitude
+            velocityDirY = velocityY / velocityMagnitude
         } else {
-            Pair(0.0, 0.0)
+            velocityDirX = 0.0
+            velocityDirY = 0.0
         }
 
         // Calculate the target point ahead of the checkpoint
         val targetX = (checkpoint.position.x + velocityDirX * lookAheadFactor * GameConstants.CHECKPOINT_RADIUS).toInt()
         val targetY = (checkpoint.position.y + velocityDirY * lookAheadFactor * GameConstants.CHECKPOINT_RADIUS).toInt()
 
+        // We still need to return a Pair here, but we only create one Pair object
+        // instead of creating temporary Pairs during the calculation
         return Pair(targetX, targetY)
     }
 
@@ -596,11 +610,17 @@ abstract class MyPod(
         // Get direction vector length
         val directionLength = VectorUtils.magnitude(directionX, directionY)
 
-        // Normalize direction vector using VectorUtils
-        val (normalizedDirX, normalizedDirY) = if (directionLength > 0.001) {
-            Pair(directionX / directionLength, directionY / directionLength)
+        // Calculate normalized direction vector components
+        // Avoid creating a Pair object for better performance
+        val normalizedDirX: Double
+        val normalizedDirY: Double
+
+        if (directionLength > 0.001) {
+            normalizedDirX = directionX / directionLength
+            normalizedDirY = directionY / directionLength
         } else {
-            Pair(0.0, 0.0)
+            normalizedDirX = 0.0
+            normalizedDirY = 0.0
         }
 
         // Calculate dot product with velocity using VectorUtils
@@ -859,6 +879,15 @@ class OpponentPod(
     }
 }
 
+/**
+ * Main function that initializes the game state and runs the game loop.
+ * The game loop:
+ * 1. Updates pod positions based on input
+ * 2. Finds the leading opponent pod
+ * 3. Calculates strategies for racer and blocker pods
+ * 4. Outputs commands for both pods
+ * 5. Updates shield status
+ */
 fun main() {
     val input = Scanner(System.`in`)
     val laps = input.nextInt()
