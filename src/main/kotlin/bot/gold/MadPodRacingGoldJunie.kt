@@ -6,6 +6,41 @@ import kotlin.math.*
  * Based on the rules and strategies from MadPodRacingGold.md
  */
 
+// Constants shared across the application
+object GameConstants {
+    const val FRICTION = 0.85
+    const val POD_SIZE = 400.0
+    const val CHECKPOINT_RADIUS = 600.0
+
+    // Constants for trajectory optimization
+    const val MIN_DISTANCE_FOR_OPTIMIZATION = 50.0
+    const val MAX_ANGLE_FOR_OPTIMIZATION = 70.0
+
+    // Constants for hairpin turn handling
+    const val HAIRPIN_HIGH_ANGLE = 70
+    const val HAIRPIN_MID_ANGLE = 40
+    const val HAIRPIN_HIGH_THRUST = 100
+    const val HAIRPIN_MID_THRUST = 30
+    const val HAIRPIN_LOW_THRUST = 0
+}
+
+// Vector utility functions to avoid duplication
+object VectorUtils {
+    // Calculate magnitude of a vector
+    fun magnitude(x: Int, y: Int): Double = 
+        sqrt(x.toDouble().pow(2) + y.toDouble().pow(2))
+
+    // Calculate dot product of two vectors
+    fun dotProduct(x1: Int, y1: Int, x2: Int, y2: Int): Int =
+        x1 * x2 + y1 * y2
+
+    // Normalize a vector
+    fun normalize(x: Int, y: Int): Pair<Double, Double> {
+        val mag = magnitude(x, y)
+        return if (mag > 0.001) Pair(x / mag, y / mag) else Pair(0.0, 0.0)
+    }
+}
+
 // Data classes for game entities
 data class Point(val x: Int, val y: Int) {
     companion object {
@@ -74,13 +109,6 @@ open class BasePod(
             velocityY = value.second
         }
 
-    // Constants
-    companion object {
-        const val FRICTION = 0.85
-        const val POD_SIZE = 400.0
-        const val CHECKPOINT_RADIUS = 600.0
-    }
-
     // Squared distance for comparison purposes (optimization)
     fun squaredDistanceToCheckpoint(checkpoint: Checkpoint): Double = 
         Point.squaredDistanceBetween(posX, posY, checkpoint.position.x, checkpoint.position.y)
@@ -93,13 +121,13 @@ open class BasePod(
 
     // Calculate current speed
     fun getCurrentSpeed(): Double = 
-        sqrt(velocityX.toDouble().pow(2) + velocityY.toDouble().pow(2))
+        VectorUtils.magnitude(velocityX, velocityY)
 
     // Calculate relative speed between this pod and another pod
     fun getRelativeSpeed(otherPod: BasePod): Double = 
-        sqrt(
-            Math.pow((velocityX - otherPod.velocityX).toDouble(), 2.0) +
-            Math.pow((velocityY - otherPod.velocityY).toDouble(), 2.0)
+        VectorUtils.magnitude(
+            velocityX - otherPod.velocityX,
+            velocityY - otherPod.velocityY
         )
 
     // Predict if the pod will enter a checkpoint in the next few turns
@@ -113,8 +141,8 @@ open class BasePod(
         // Simulate movement for the next 6 turns
         repeat(6) {
             // Apply friction to velocity
-            velocityX = (velocityX * FRICTION).toInt()
-            velocityY = (velocityY * FRICTION).toInt()
+            velocityX = (velocityX * GameConstants.FRICTION).toInt()
+            velocityY = (velocityY * GameConstants.FRICTION).toInt()
 
             // Update position based on velocity
             approxPositionX += velocityX
@@ -126,7 +154,7 @@ open class BasePod(
                     approxPositionY,
                     currentCheckpoint.position.x,
                     currentCheckpoint.position.y,
-                    CHECKPOINT_RADIUS
+                    GameConstants.CHECKPOINT_RADIUS
                 )) {
                 return true
             }
@@ -149,8 +177,6 @@ open class BasePod(
         this.angle = angle
         this.nextCheckpointId = nextCheckpointId
     }
-
-
 }
 
 // Abstract base class for player-controlled pods
@@ -173,33 +199,17 @@ abstract class MyPod(
     protected var lastCheckpointId = 0
 
     // Collision prediction parameters
-    val collisionRadius = POD_SIZE.toInt() // Radius to consider for collision
+    val collisionRadius = GameConstants.POD_SIZE.toInt() // Radius to consider for collision
     val collisionTimeThreshold = 3 // Number of turns to look ahead for collision prediction
     val collisionProbabilityThreshold = 0.7 // Probability threshold to activate shield
-
-    // Constants for trajectory optimization
-    companion object {
-        const val MIN_DISTANCE_FOR_OPTIMIZATION = 50.0
-        const val MAX_ANGLE_FOR_OPTIMIZATION = 70.0
-
-        // Constants for hairpin turn handling
-        const val HAIRPIN_HIGH_ANGLE = 70
-        const val HAIRPIN_MID_ANGLE = 40
-        const val HAIRPIN_HIGH_THRUST = 100
-        const val HAIRPIN_MID_THRUST = 30
-        const val HAIRPIN_LOW_THRUST = 0
-    }
 
     // Optimize trajectory using closestPointToLine if conditions are met
     protected fun optimizeTrajectory(checkpoint: Checkpoint, podType: String): Boolean {
         // Calculate position delta and future position
-        val deltaX = (velocityX * FRICTION).toInt()
-        val deltaY = (velocityY * FRICTION).toInt()
+        val deltaX = (velocityX * GameConstants.FRICTION).toInt()
+        val deltaY = (velocityY * GameConstants.FRICTION).toInt()
 
-        val distanceTravelledOnPreviousFrame = sqrt(
-            deltaX.toDouble().pow(2) + 
-            deltaY.toDouble().pow(2)
-        )
+        val distanceTravelledOnPreviousFrame = VectorUtils.magnitude(deltaX, deltaY)
 
         val futurePositionX = posX + deltaX
         val futurePositionY = posY + deltaY
@@ -218,8 +228,8 @@ abstract class MyPod(
         )
 
         // Check if we should optimize trajectory
-        if (distanceTravelledOnPreviousFrame > MIN_DISTANCE_FOR_OPTIMIZATION && 
-            angleDiff < MAX_ANGLE_FOR_OPTIMIZATION && 
+        if (distanceTravelledOnPreviousFrame > GameConstants.MIN_DISTANCE_FOR_OPTIMIZATION && 
+            angleDiff < GameConstants.MAX_ANGLE_FOR_OPTIMIZATION && 
             futureDistanceSquared < currentDistanceSquared) {
 
             // We need to create Point objects for the closestPointToLine calculation
@@ -319,7 +329,7 @@ abstract class MyPod(
 
         // Make collision radius dynamic based on relative speed
         // Higher speeds need larger collision radius to account for movement between turns
-        val dynamicCollisionRadius = collisionRadius + (relativeSpeed * 0.5).toInt().coerceAtMost(POD_SIZE.toInt())
+        val dynamicCollisionRadius = collisionRadius + (relativeSpeed * 0.5).toInt().coerceAtMost(GameConstants.POD_SIZE.toInt())
 
         // Calculate quadratic equation coefficients for collision time
         // ||p + vt|| = r, where p is relative position, v is relative velocity, r is collision radius
@@ -382,7 +392,7 @@ abstract class MyPod(
                 val squaredDistance = Point.squaredDistanceBetween(posX, posY, opponentPod.posX, opponentPod.posY)
                 val distance = sqrt(squaredDistance)  // Only calculate actual distance for logging
                 val relativeSpeed = getRelativeSpeed(opponentPod)
-                val dynamicRadius = collisionRadius + (relativeSpeed * 0.5).toInt().coerceAtMost(POD_SIZE.toInt())
+                val dynamicRadius = collisionRadius + (relativeSpeed * 0.5).toInt().coerceAtMost(GameConstants.POD_SIZE.toInt())
                 System.err.println("Collision prediction: Time=$collisionTime, Prob=$probability, Dist=$distance, RelSpeed=$relativeSpeed, Radius=$dynamicRadius")
             }
 
@@ -435,8 +445,8 @@ abstract class MyPod(
         val velocityDirY = if (velocityMagnitude > 0) velocity.second / velocityMagnitude else 0.0
 
         // Calculate the target point ahead of the checkpoint
-        val targetX = (checkpoint.position.x + velocityDirX * lookAheadFactor * CHECKPOINT_RADIUS).toInt()
-        val targetY = (checkpoint.position.y + velocityDirY * lookAheadFactor * CHECKPOINT_RADIUS).toInt()
+        val targetX = (checkpoint.position.x + velocityDirX * lookAheadFactor * GameConstants.CHECKPOINT_RADIUS).toInt()
+        val targetY = (checkpoint.position.y + velocityDirY * lookAheadFactor * GameConstants.CHECKPOINT_RADIUS).toInt()
 
         return Pair(targetX, targetY)
     }
@@ -482,19 +492,19 @@ abstract class MyPod(
     // Handle hairpin turn logic and return the appropriate thrust
     protected fun handleHairpinTurn(angleDiff: Double, podType: String): Int {
         // If we're in a sharp turn and the angle is large, turn off the engine
-        if (angleDiff > HAIRPIN_HIGH_ANGLE) {
+        if (angleDiff > GameConstants.HAIRPIN_HIGH_ANGLE) {
             System.err.println("$podType: Hairpin turn: Engine off, rotating only. Angle diff: $angleDiff")
-            return HAIRPIN_LOW_THRUST
+            return GameConstants.HAIRPIN_LOW_THRUST
         } 
         // Once we've rotated enough, gradually increase thrust
-        else if (angleDiff > HAIRPIN_MID_ANGLE) {
+        else if (angleDiff > GameConstants.HAIRPIN_MID_ANGLE) {
             System.err.println("$podType: Hairpin turn: Minimal thrust during turn. Angle diff: $angleDiff")
-            return HAIRPIN_MID_THRUST
+            return GameConstants.HAIRPIN_MID_THRUST
         }
         // When angle is good enough, resume normal thrust
         else {
             System.err.println("$podType: Hairpin turn: Resuming thrust. Angle diff: $angleDiff")
-            return HAIRPIN_HIGH_THRUST
+            return GameConstants.HAIRPIN_HIGH_THRUST
         }
     }
 
@@ -515,7 +525,7 @@ abstract class MyPod(
             posY,
             checkpoint.position.x,
             checkpoint.position.y,
-            CHECKPOINT_RADIUS
+            GameConstants.CHECKPOINT_RADIUS
         )
     }
 
