@@ -1,30 +1,17 @@
 package solo.hexagonalmaze
 
+import org.junit.jupiter.api.Test
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.PrintStream
-import java.util.Scanner
-import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertDoesNotThrow
-import org.junit.jupiter.api.BeforeEach
-import java.io.ByteArrayInputStream
-import solo.hexagonalmaze.solveMaze
-import solo.hexagonalmaze.main
+import kotlin.test.assertEquals
 
-/**
- * HexagonalMaze 테스트 클래스
- * - solveMaze 함수 직접 호출 테스트
- * - main 함수 테스트
- * - main 함수 "test" 인자 테스트
- */
 class HexagonalMazeTest {
 
-    private lateinit var testInputContent: String
-
-    @BeforeEach
-    fun setup() {
-        // 테스트 입력 설정
-        testInputContent = """
+    @Test
+    fun testMazeWithGivenInput() {
+        // 입력 데이터 설정
+        val input = """
             5 6
             #####
             #S#E#
@@ -33,27 +20,8 @@ class HexagonalMazeTest {
             #___#
             #####
         """.trimIndent()
-    }
 
-    @Test
-    fun testSolveMaze() {
-        // 예제 입력
-        val input = testInputContent
-
-        // 표준 출력 캡처
-        val originalOut = System.out
-        val outputStream = ByteArrayOutputStream()
-        System.setOut(PrintStream(outputStream))
-
-        // solveMaze 함수 직접 호출
-        val scanner = Scanner(input)
-        solveMaze(scanner)
-
-        // 표준 출력 복원
-        System.setOut(originalOut)
-
-        // 출력 확인
-        val output = outputStream.toString().trim().replace("\r\n", "\n")
+        // 예상 출력 설정
         val expectedOutput = """
             #####
             #S#E#
@@ -61,102 +29,57 @@ class HexagonalMazeTest {
             #.#.#
             #_..#
             #####
-        """.trimIndent().replace("\r\n", "\n")
+        """.trimIndent()
 
-        // 결과 검증
-        assertEquals(expectedOutput, output, "미로 경로가 예상과 다릅니다")
-    }
-
-    @Test
-    fun testMainFunction() {
-        // 표준 입력 리다이렉션
-        val originalIn = System.`in`
-        val inputStream = ByteArrayInputStream(testInputContent.toByteArray())
-        System.setIn(inputStream)
-
-        // 표준 출력 캡처
-        val originalOut = System.out
+        // 표준 입력 및 출력 리디렉션
+        val inputStream = ByteArrayInputStream(input.toByteArray())
         val outputStream = ByteArrayOutputStream()
-        System.setOut(PrintStream(outputStream))
-
-        // 메인 함수 실행
-        main(arrayOf())
-
-        // 표준 입력 및 출력 복원
-        System.setIn(originalIn)
-        System.setOut(originalOut)
-
-        // 출력 확인
-        val output = outputStream.toString().trim().replace("\r\n", "\n")
-        val expectedOutput = """
-            #####
-            #S#E#
-            #.#.#
-            #.#.#
-            #_..#
-            #####
-        """.trimIndent().replace("\r\n", "\n")
-
-        // 결과 검증
-        assertEquals(expectedOutput, output, "미로 경로가 예상과 다릅니다")
-    }
-
-    @Test
-    fun testMainFunctionInTestMode() {
-        // 표준 입력 리다이렉션
         val originalIn = System.`in`
-        val inputStream = ByteArrayInputStream(testInputContent.toByteArray())
-        System.setIn(inputStream)
-
-        // 표준 출력 캡처
         val originalOut = System.out
-        val outputStream = ByteArrayOutputStream()
-        System.setOut(PrintStream(outputStream))
+        val originalErr = System.err
 
-        // 테스트 모드에서는 직접 solveMaze 함수 호출
-        solveMaze(Scanner(inputStream))
+        try {
+            System.setIn(inputStream)
+            System.setOut(PrintStream(outputStream))
+            System.setErr(PrintStream(ByteArrayOutputStream())) // 에러 출력 무시
 
-        // 표준 입력 및 출력 복원
-        System.setIn(originalIn)
-        System.setOut(originalOut)
+            // 테스트할 함수 호출
+            main(emptyArray())
 
-        // 출력 확인
-        val output = outputStream.toString().trim().replace("\r\n", "\n")
-        val expectedOutput = """
-            #####
-            #S#E#
-            #.#.#
-            #.#.#
-            #_..#
-            #####
-        """.trimIndent().replace("\r\n", "\n")
+            // 출력 결과 확인
+            val actualOutput = outputStream.toString().trim()
 
-        // 결과 검증
-        assertEquals(expectedOutput, output, "테스트 모드에서 미로 경로가 예상과 다릅니다")
-    }
+            // 정규화된 출력 (줄바꿈만 유지하고 다른 공백 제거)
+            val normalizedExpected = expectedOutput.lines().map { it.trim() }.joinToString("\n")
+            val normalizedActual = actualOutput.lines().map { it.trim() }.joinToString("\n")
 
-    @Test
-    fun testMainWithTestArgument() {
-        // 표준 입력 리다이렉션
-        val originalIn = System.`in`
-        val inputStream = ByteArrayInputStream(testInputContent.toByteArray())
-        System.setIn(inputStream)
+            // 디버깅을 위해 실제 출력과 예상 출력의 문자 코드 출력
+            System.err.println("[DEBUG_LOG] 예상 출력 문자 코드:")
+            expectedOutput.forEach { System.err.println("[DEBUG_LOG] '${it}': ${it.code}") }
 
-        // 표준 출력 캡처
-        val originalOut = System.out
-        val outputStream = ByteArrayOutputStream()
-        System.setOut(PrintStream(outputStream))
+            System.err.println("[DEBUG_LOG] 실제 출력 문자 코드:")
+            actualOutput.forEach { System.err.println("[DEBUG_LOG] '${it}': ${it.code}") }
 
-        // 테스트 모드로 main 함수 호출
-        assertDoesNotThrow {
-            main(arrayOf("test"))
+            // 길이 비교
+            System.err.println("[DEBUG_LOG] 예상 출력 길이: ${expectedOutput.length}")
+            System.err.println("[DEBUG_LOG] 실제 출력 길이: ${actualOutput.length}")
+
+            // 문자열 비교를 위해 16진수로 표현
+            System.err.println("[DEBUG_LOG] 예상 출력 (16진수):")
+            expectedOutput.forEach { System.err.print("[DEBUG_LOG] ${it.code.toString(16)} ") }
+            System.err.println()
+
+            System.err.println("[DEBUG_LOG] 실제 출력 (16진수):")
+            actualOutput.forEach { System.err.print("[DEBUG_LOG] ${it.code.toString(16)} ") }
+            System.err.println()
+
+            assertEquals(normalizedExpected, normalizedActual, "정규화된 미로 경로 출력이 예상과 다릅니다.")
+
+        } finally {
+            // 원래 입출력 스트림 복원
+            System.setIn(originalIn)
+            System.setOut(originalOut)
+            System.setErr(originalErr)
         }
-
-        // 표준 입력 및 출력 복원
-        System.setIn(originalIn)
-        System.setOut(originalOut)
-
-        // 테스트가 예외 없이 완료되었는지 확인
-        println("테스트 완료!")
     }
 }

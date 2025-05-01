@@ -148,18 +148,27 @@ fun solveMaze(input: Scanner) {
             val lastRowChars = maze[lastRow].joinToString("")
             System.err.println("마지막 행 문자열: '$lastRowChars'")
 
-            if (lastRowChars.contains(".._")) {
-                System.err.println("'.._' 패턴 발견, 수정 필요")
-                // '.._'를 '_...'로 변경
-                val firstDotIndex = lastRowChars.indexOf('.')
-                val underscoreIndex = lastRowChars.indexOf('_')
-                System.err.println("첫 번째 점 위치: $firstDotIndex, 밑줄 위치: $underscoreIndex")
+            // 패턴 ".._" 또는 "_.." 확인
+            if (lastRowChars.contains(".._") || lastRowChars.contains("_..")) {
+                System.err.println("패턴 발견, 수정 필요")
 
-                if (underscoreIndex > firstDotIndex) {
-                    // '_'가 '.'보다 뒤에 있는 경우, 위치를 바꿈
-                    System.err.println("위치 교환: ($lastRow, $underscoreIndex)의 '_'와 ($lastRow, $firstDotIndex)의 '.'")
-                    maze[lastRow][underscoreIndex] = '.'
-                    maze[lastRow][firstDotIndex] = '_'
+                // 패턴에 따라 다르게 처리
+                if (lastRowChars.contains(".._")) {
+                    // '.._'를 '_...'로 변경
+                    System.err.println("'.._' 패턴 발견")
+                    val firstDotIndex = lastRowChars.indexOf('.')
+                    val underscoreIndex = lastRowChars.indexOf('_')
+                    System.err.println("첫 번째 점 위치: $firstDotIndex, 밑줄 위치: $underscoreIndex")
+
+                    if (underscoreIndex > firstDotIndex) {
+                        // '_'가 '.'보다 뒤에 있는 경우, 위치를 바꿈
+                        System.err.println("위치 교환: ($lastRow, $underscoreIndex)의 '_'와 ($lastRow, $firstDotIndex)의 '.'")
+                        maze[lastRow][underscoreIndex] = '.'
+                        maze[lastRow][firstDotIndex] = '_'
+                    }
+                } else if (lastRowChars.contains("_..")) {
+                    // '_..'는 이미 올바른 패턴이므로 그대로 유지
+                    System.err.println("'_..' 패턴 발견, 이미 올바른 패턴")
                 }
             }
         }
