@@ -30,8 +30,16 @@ object VectorUtils {
     fun magnitude(x: Int, y: Int): Double = 
         sqrt(x.toDouble().pow(2) + y.toDouble().pow(2))
 
+    // Calculate magnitude of a vector with double components
+    fun magnitude(x: Double, y: Double): Double = 
+        sqrt(x.pow(2) + y.pow(2))
+
     // Calculate dot product of two vectors
     fun dotProduct(x1: Int, y1: Int, x2: Int, y2: Int): Int =
+        x1 * x2 + y1 * y2
+
+    // Calculate dot product of two vectors with double components
+    fun dotProduct(x1: Double, y1: Double, x2: Double, y2: Double): Double =
         x1 * x2 + y1 * y2
 
     // Normalize a vector
@@ -39,6 +47,10 @@ object VectorUtils {
         val mag = magnitude(x, y)
         return if (mag > 0.001) Pair(x / mag, y / mag) else Pair(0.0, 0.0)
     }
+
+    // Calculate squared distance between two points (optimization for comparisons)
+    fun squaredDistance(x1: Int, y1: Int, x2: Int, y2: Int): Double =
+        (x1 - x2).toDouble().pow(2) + (y1 - y2).toDouble().pow(2)
 }
 
 // Data classes for game entities
@@ -46,11 +58,11 @@ data class Point(val x: Int, val y: Int) {
     companion object {
         // Static methods to avoid creating temporary Point objects
         fun distanceBetween(x1: Int, y1: Int, x2: Int, y2: Int): Double =
-            sqrt((x1 - x2).toDouble().pow(2) + (y1 - y2).toDouble().pow(2))
+            sqrt(VectorUtils.squaredDistance(x1, y1, x2, y2))
 
         // Squared distance for comparison purposes (optimization)
         fun squaredDistanceBetween(x1: Int, y1: Int, x2: Int, y2: Int): Double =
-            (x1 - x2).toDouble().pow(2) + (y1 - y2).toDouble().pow(2)
+            VectorUtils.squaredDistance(x1, y1, x2, y2)
 
         fun angleBetween(x1: Int, y1: Int, x2: Int, y2: Int): Double =
             atan2((y2 - y1).toDouble(), (x2 - x1).toDouble()) * 180 / PI
@@ -67,7 +79,8 @@ data class Point(val x: Int, val y: Int) {
                 return p
             }
 
-            val dotProduct = vectorAtoP.x * vectorAtoB.x + vectorAtoP.y * vectorAtoB.y
+            // Use VectorUtils for dot product calculation
+            val dotProduct = VectorUtils.dotProduct(vectorAtoP.x, vectorAtoP.y, vectorAtoB.x, vectorAtoB.y)
             val t = dotProduct / distanceAtoBSquared
 
             return Point(
@@ -256,19 +269,18 @@ abstract class MyPod(
         val nextCheckpoint = checkpoints[nextCheckpointIndex]
 
         // Calculate the angle between current checkpoint and next checkpoint
-        val vectorToCurrent = Point(
-            currentCheckpoint.position.x - posX,
-            currentCheckpoint.position.y - posY
-        )
-        val vectorToNext = Point(
-            nextCheckpoint.position.x - currentCheckpoint.position.x,
-            nextCheckpoint.position.y - currentCheckpoint.position.y
-        )
+        val vectorToCurrentX = currentCheckpoint.position.x - posX
+        val vectorToCurrentY = currentCheckpoint.position.y - posY
+        val vectorToNextX = nextCheckpoint.position.x - currentCheckpoint.position.x
+        val vectorToNextY = nextCheckpoint.position.y - currentCheckpoint.position.y
 
-        // Calculate the angle between these vectors
-        val dotProduct = vectorToCurrent.x * vectorToNext.x + vectorToCurrent.y * vectorToNext.y
-        val magnitudeCurrent = sqrt(vectorToCurrent.x.toDouble().pow(2) + vectorToCurrent.y.toDouble().pow(2))
-        val magnitudeNext = sqrt(vectorToNext.x.toDouble().pow(2) + vectorToNext.y.toDouble().pow(2))
+        // Calculate the angle between these vectors using VectorUtils
+        val dotProduct = VectorUtils.dotProduct(
+            vectorToCurrentX, vectorToCurrentY, 
+            vectorToNextX, vectorToNextY
+        )
+        val magnitudeCurrent = VectorUtils.magnitude(vectorToCurrentX, vectorToCurrentY)
+        val magnitudeNext = VectorUtils.magnitude(vectorToNextX, vectorToNextY)
 
         // Avoid division by zero
         if (magnitudeCurrent < 0.001 || magnitudeNext < 0.001) {
@@ -321,10 +333,10 @@ abstract class MyPod(
         // Calculate relative position and velocity
         val relativeX = otherPod.posX - posX
         val relativeY = otherPod.posY - posY
-        val relativeVX = otherPod.velocity.first - velocity.first
-        val relativeVY = otherPod.velocity.second - velocity.second
+        val relativeVX = otherPod.velocityX - velocityX
+        val relativeVY = otherPod.velocityY - velocityY
 
-        // Calculate relative speed
+        // Calculate relative speed using VectorUtils
         val relativeSpeed = getRelativeSpeed(otherPod)
 
         // Make collision radius dynamic based on relative speed
@@ -333,9 +345,19 @@ abstract class MyPod(
 
         // Calculate quadratic equation coefficients for collision time
         // ||p + vt|| = r, where p is relative position, v is relative velocity, r is collision radius
-        val a = relativeVX.toDouble() * relativeVX.toDouble() + relativeVY.toDouble() * relativeVY.toDouble()
-        val b = 2.0 * (relativeX.toDouble() * relativeVX.toDouble() + relativeY.toDouble() * relativeVY.toDouble())
-        val c = relativeX.toDouble() * relativeX.toDouble() + relativeY.toDouble() * relativeY.toDouble() - dynamicCollisionRadius.toDouble() * dynamicCollisionRadius.toDouble()
+
+        // Coefficient a = |v|²
+        val a = VectorUtils.magnitude(relativeVX, relativeVY).pow(2)
+
+        // Coefficient b = 2(p·v)
+        val b = 2.0 * VectorUtils.dotProduct(
+            relativeX.toDouble(), relativeY.toDouble(),
+            relativeVX.toDouble(), relativeVY.toDouble()
+        )
+
+        // Coefficient c = |p|² - r²
+        val c = VectorUtils.squaredDistance(0, 0, relativeX, relativeY) - 
+                dynamicCollisionRadius.toDouble() * dynamicCollisionRadius.toDouble()
 
         // If pods are not moving relative to each other
         if (a < 0.0001) {
@@ -439,10 +461,13 @@ abstract class MyPod(
         // Higher speeds need to aim further ahead
         val lookAheadFactor = (currentSpeed / 100.0).coerceAtMost(3.0)
 
-        // Calculate the direction vector of our velocity
-        val velocityMagnitude = sqrt(velocity.first.toDouble().pow(2) + velocity.second.toDouble().pow(2))
-        val velocityDirX = if (velocityMagnitude > 0) velocity.first / velocityMagnitude else 0.0
-        val velocityDirY = if (velocityMagnitude > 0) velocity.second / velocityMagnitude else 0.0
+        // Calculate the normalized direction vector of our velocity using VectorUtils
+        val velocityMagnitude = VectorUtils.magnitude(velocityX, velocityY)
+        val (velocityDirX, velocityDirY) = if (velocityMagnitude > 0.001) {
+            Pair(velocityX / velocityMagnitude, velocityY / velocityMagnitude)
+        } else {
+            Pair(0.0, 0.0)
+        }
 
         // Calculate the target point ahead of the checkpoint
         val targetX = (checkpoint.position.x + velocityDirX * lookAheadFactor * GameConstants.CHECKPOINT_RADIUS).toInt()
@@ -454,13 +479,21 @@ abstract class MyPod(
     // Adjust thrust based on inertia to compensate for pod's momentum
     protected fun adjustThrustForInertia(baseThrust: Int, targetCheckpoint: Checkpoint): Int {
         // Get the angle to the checkpoint in radians
-        val targetAngle = Point.angleBetween(posX, posY, targetCheckpoint.position.x, targetCheckpoint.position.y) * PI / 180.0
+        val targetAngleRadians = Point.angleBetween(posX, posY, targetCheckpoint.position.x, targetCheckpoint.position.y) * PI / 180.0
 
         // Get the current speed
         val currentSpeed = getCurrentSpeed()
 
+        // Calculate the direction vector towards the checkpoint
+        val directionX = cos(targetAngleRadians)
+        val directionY = sin(targetAngleRadians)
+
         // Calculate the dot product to determine if we're moving in the right direction
-        val dotProduct = velocityX * cos(targetAngle) + velocityY * sin(targetAngle)
+        // using VectorUtils for better readability
+        val dotProduct = VectorUtils.dotProduct(
+            velocityX.toDouble(), velocityY.toDouble(),
+            directionX, directionY
+        )
         val movingTowardsTarget = dotProduct > 0
 
         // Adjust thrust based on inertia and current movement
@@ -559,14 +592,22 @@ abstract class MyPod(
         // Calculate direction vector from pod to checkpoint
         val directionX = checkpoint.position.x - posX
         val directionY = checkpoint.position.y - posY
-        val directionLength = sqrt(directionX.toDouble().pow(2) + directionY.toDouble().pow(2))
 
-        // Normalize direction vector
-        val normalizedDirX = if (directionLength > 0) directionX / directionLength else 0.0
-        val normalizedDirY = if (directionLength > 0) directionY / directionLength else 0.0
+        // Get direction vector length
+        val directionLength = VectorUtils.magnitude(directionX, directionY)
 
-        // Calculate dot product with velocity
-        val dotProduct = velocityX * normalizedDirX + velocityY * normalizedDirY
+        // Normalize direction vector using VectorUtils
+        val (normalizedDirX, normalizedDirY) = if (directionLength > 0.001) {
+            Pair(directionX / directionLength, directionY / directionLength)
+        } else {
+            Pair(0.0, 0.0)
+        }
+
+        // Calculate dot product with velocity using VectorUtils
+        val dotProduct = VectorUtils.dotProduct(
+            velocityX.toDouble(), velocityY.toDouble(),
+            normalizedDirX, normalizedDirY
+        )
 
         // If dot product is positive, we're moving towards the checkpoint
         return dotProduct > 0
