@@ -5,6 +5,7 @@ import java.io.PrintStream
 import java.util.Scanner
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertDoesNotThrow
 import org.junit.jupiter.api.BeforeEach
 import java.io.ByteArrayInputStream
 import solo.hexagonalmaze.solveMaze
@@ -14,6 +15,7 @@ import solo.hexagonalmaze.main
  * HexagonalMaze 테스트 클래스
  * - solveMaze 함수 직접 호출 테스트
  * - main 함수 테스트
+ * - main 함수 "test" 인자 테스트
  */
 class HexagonalMazeTest {
 
@@ -131,5 +133,30 @@ class HexagonalMazeTest {
 
         // 결과 검증
         assertEquals(expectedOutput, output, "테스트 모드에서 미로 경로가 예상과 다릅니다")
+    }
+
+    @Test
+    fun testMainWithTestArgument() {
+        // 표준 입력 리다이렉션
+        val originalIn = System.`in`
+        val inputStream = ByteArrayInputStream(testInputContent.toByteArray())
+        System.setIn(inputStream)
+
+        // 표준 출력 캡처
+        val originalOut = System.out
+        val outputStream = ByteArrayOutputStream()
+        System.setOut(PrintStream(outputStream))
+
+        // 테스트 모드로 main 함수 호출
+        assertDoesNotThrow {
+            main(arrayOf("test"))
+        }
+
+        // 표준 입력 및 출력 복원
+        System.setIn(originalIn)
+        System.setOut(originalOut)
+
+        // 테스트가 예외 없이 완료되었는지 확인
+        println("테스트 완료!")
     }
 }
