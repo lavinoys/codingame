@@ -519,12 +519,47 @@ abstract class MyPod(
         )
     }
 
-    // Check if the pod is at the exact x,y position of the checkpoint
+    // Check if the pod is at the exact x,y position of the checkpoint and has near-zero velocity
     protected fun isAtExactCheckpointPosition(checkpoint: Checkpoint): Boolean {
-        // Define a small tolerance for "exact" position (e.g., within 5 units)
-        val tolerance = 5
-        return abs(posX - checkpoint.position.x) <= tolerance && 
-               abs(posY - checkpoint.position.y) <= tolerance
+        // Define a tolerance for "exact" position (within 20 units)
+        val positionTolerance = 20
+
+        // Define a tolerance for "zero" velocity (within 10 units per axis)
+        val velocityTolerance = 10
+
+        // Check if position is within tolerance
+        val isPositionExact = abs(posX - checkpoint.position.x) <= positionTolerance && 
+                              abs(posY - checkpoint.position.y) <= positionTolerance
+
+        // Check if velocity is near zero
+        val isVelocityNearZero = abs(velocityX) <= velocityTolerance && 
+                                abs(velocityY) <= velocityTolerance
+
+        // Log the exact position check for debugging
+        if (isPositionExact) {
+            System.err.println("POSITION CHECK: At position (${posX}, ${posY}), target (${checkpoint.position.x}, ${checkpoint.position.y}), velocity (${velocityX}, ${velocityY})")
+        }
+
+        // Both position and velocity conditions must be met
+        return isPositionExact && isVelocityNearZero
+    }
+
+    // Check if the pod is approaching the checkpoint (moving towards it)
+    protected fun isApproachingCheckpoint(checkpoint: Checkpoint): Boolean {
+        // Calculate direction vector from pod to checkpoint
+        val directionX = checkpoint.position.x - posX
+        val directionY = checkpoint.position.y - posY
+        val directionLength = sqrt(directionX.toDouble().pow(2) + directionY.toDouble().pow(2))
+
+        // Normalize direction vector
+        val normalizedDirX = if (directionLength > 0) directionX / directionLength else 0.0
+        val normalizedDirY = if (directionLength > 0) directionY / directionLength else 0.0
+
+        // Calculate dot product with velocity
+        val dotProduct = velocityX * normalizedDirX + velocityY * normalizedDirY
+
+        // If dot product is positive, we're moving towards the checkpoint
+        return dotProduct > 0
     }
 
     fun getCommand(): String {
@@ -719,8 +754,48 @@ class BlockerPod(
             // Set target to exact coordinates of the checkpoint
             targetX = secondCheckpoint.position.x
             targetY = secondCheckpoint.position.y
-            thrust = 20  // Low thrust to move precisely
-            System.err.println("BLOCKER: Inside checkpoint but not at exact position, moving to exact position (checkpointCount=$checkpointCount)")
+
+            // Calculate distance to exact checkpoint position
+            val distToExact = Point.distanceBetween(posX, posY, secondCheckpoint.position.x, secondCheckpoint.position.y)
+
+            // Calculate current speed
+            val currentSpeed = getCurrentSpeed()
+
+            // Calculate the dot product to determine if we're moving towards the checkpoint
+            val directionX = secondCheckpoint.position.x - posX
+            val directionY = secondCheckpoint.position.y - posY
+            val directionLength = sqrt(directionX.toDouble().pow(2) + directionY.toDouble().pow(2))
+
+            // Normalize direction vector
+            val normalizedDirX = if (directionLength > 0) directionX / directionLength else 0.0
+            val normalizedDirY = if (directionLength > 0) directionY / directionLength else 0.0
+
+            // Calculate dot product with velocity
+            val dotProduct = velocityX * normalizedDirX + velocityY * normalizedDirY
+
+            // If we're moving towards the checkpoint (positive dot product)
+            val movingTowardsCheckpoint = dotProduct > 0
+
+            // If we're very close to the exact position, stop completely
+            if (distToExact < 50) {
+                thrust = 0
+                System.err.println("BLOCKER: Very close to exact position, stopping completely. Dist=$distToExact, Speed=$currentSpeed")
+            } 
+            // If we're moving too fast towards the checkpoint, stop to avoid overshooting
+            else if (movingTowardsCheckpoint && currentSpeed > 50) {
+                thrust = 0
+                System.err.println("BLOCKER: Moving too fast towards checkpoint, stopping to avoid overshooting. Speed=$currentSpeed, DotProduct=$dotProduct")
+            }
+            // If we're moving away from the checkpoint, apply minimal thrust to return
+            else if (!movingTowardsCheckpoint && distToExact > 20) {
+                thrust = (distToExact / 30).toInt().coerceAtMost(5)
+                System.err.println("BLOCKER: Moving away from checkpoint, applying minimal thrust to return. Thrust=$thrust, Dist=$distToExact")
+            }
+            // Normal case - very low thrust for precise positioning
+            else {
+                thrust = (distToExact / 25).toInt().coerceAtMost(8)
+                System.err.println("BLOCKER: Inside checkpoint, moving precisely to exact position. Thrust=$thrust, Dist=$distToExact")
+            }
             return
         }
 
@@ -747,26 +822,44 @@ class BlockerPod(
         // Calculate the angle to the checkpoint
         val angleDiff = Math.abs(angleToCheckpoint(secondCheckpoint))
 
-        // Try to optimize trajectory using the shared method
-        if (!optimizeTrajectory(secondCheckpoint, "BLOCKER")) {
-            // If trajectory optimization failed, adjust target position based on inertia
-            val (adjustedX, adjustedY) = calculateInertiaAdjustedTarget(secondCheckpoint)
-            targetX = adjustedX
-            targetY = adjustedY
+        // Check if we're approaching the checkpoint
+        val isApproaching = isApproachingCheckpoint(secondCheckpoint)
+
+        // If we're approaching the checkpoint at high speed and getting close, start slowing down early
+        if (isApproaching && distanceToCheckpoint < 1200 && currentSpeed > 100) {
+            // Target the exact checkpoint position
+            targetX = secondCheckpoint.position.x
+            targetY = secondCheckpoint.position.y
+
+            // Calculate a deceleration curve - more thrust when far, less when close
+            val decelFactor = ((distanceToCheckpoint - 600) / 600).coerceIn(0.0, 1.0)
+            thrust = (decelFactor * 50).toInt()
+
+            System.err.println("BLOCKER: Approaching checkpoint at high speed, controlled deceleration. Distance=$distanceToCheckpoint, Speed=$currentSpeed, Thrust=$thrust")
         }
+        // Normal targeting and thrust calculation
+        else {
+            // Try to optimize trajectory using the shared method
+            if (!optimizeTrajectory(secondCheckpoint, "BLOCKER")) {
+                // If trajectory optimization failed, adjust target position based on inertia
+                val (adjustedX, adjustedY) = calculateInertiaAdjustedTarget(secondCheckpoint)
+                targetX = adjustedX
+                targetY = adjustedY
+            }
 
-        // Check if we're in a hairpin turn
-        val isHairpin = isHairpinTurn(checkpoints, checkpoints.size)
+            // Check if we're in a hairpin turn
+            val isHairpin = isHairpinTurn(checkpoints, checkpoints.size)
 
-        // Cornering sequence for hairpin turns
-        if (isHairpin) {
-            thrust = handleHairpinTurn(angleDiff, "BLOCKER")
-        } else {
-            // Adjust thrust based on distance, angle, and inertia
-            val baseThrust = calculateBaseThrust(angleDiff, squaredDistance)
+            // Cornering sequence for hairpin turns
+            if (isHairpin) {
+                thrust = handleHairpinTurn(angleDiff, "BLOCKER")
+            } else {
+                // Adjust thrust based on distance, angle, and inertia
+                val baseThrust = calculateBaseThrust(angleDiff, squaredDistance)
 
-            // Apply inertia correction to thrust
-            thrust = adjustThrustForInertia(baseThrust, secondCheckpoint)
+                // Apply inertia correction to thrust
+                thrust = adjustThrustForInertia(baseThrust, secondCheckpoint)
+            }
         }
 
         System.err.println("BLOCKER: Moving to second checkpoint - Distance: $distanceToCheckpoint, Angle: $angleDiff, Thrust: $thrust")
