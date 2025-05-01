@@ -168,6 +168,10 @@ abstract class MyPod(
     var shieldActive: Int = 0  // Number of turns the shield is active
     var useBoost: Boolean = false
 
+    // Track checkpoint count for home run detection
+    protected var checkpointCount = 0
+    protected var lastCheckpointId = 0
+
     // Collision prediction parameters
     val collisionRadius = POD_SIZE.toInt() // Radius to consider for collision
     val collisionTimeThreshold = 3 // Number of turns to look ahead for collision prediction
@@ -177,6 +181,13 @@ abstract class MyPod(
     companion object {
         const val MIN_DISTANCE_FOR_OPTIMIZATION = 50.0
         const val MAX_ANGLE_FOR_OPTIMIZATION = 70.0
+
+        // Constants for hairpin turn handling
+        const val HAIRPIN_HIGH_ANGLE = 70
+        const val HAIRPIN_MID_ANGLE = 40
+        const val HAIRPIN_HIGH_THRUST = 100
+        const val HAIRPIN_MID_THRUST = 30
+        const val HAIRPIN_LOW_THRUST = 0
     }
 
     // Optimize trajectory using closestPointToLine if conditions are met
@@ -275,6 +286,12 @@ abstract class MyPod(
     }
 
     override fun update(x: Int, y: Int, vx: Int, vy: Int, angle: Int, nextCheckpointId: Int) {
+        // Track checkpoint changes to count laps
+        if (this.nextCheckpointId != nextCheckpointId) {
+            checkpointCount++
+            lastCheckpointId = this.nextCheckpointId
+        }
+
         super.update(x, y, vx, vy, angle, nextCheckpointId)
 
         // Update shield cooldown
@@ -462,6 +479,54 @@ abstract class MyPod(
                 "Thrust: $thrust")
     }
 
+    // Handle hairpin turn logic and return the appropriate thrust
+    protected fun handleHairpinTurn(angleDiff: Double, podType: String): Int {
+        // If we're in a sharp turn and the angle is large, turn off the engine
+        if (angleDiff > HAIRPIN_HIGH_ANGLE) {
+            System.err.println("$podType: Hairpin turn: Engine off, rotating only. Angle diff: $angleDiff")
+            return HAIRPIN_LOW_THRUST
+        } 
+        // Once we've rotated enough, gradually increase thrust
+        else if (angleDiff > HAIRPIN_MID_ANGLE) {
+            System.err.println("$podType: Hairpin turn: Minimal thrust during turn. Angle diff: $angleDiff")
+            return HAIRPIN_MID_THRUST
+        }
+        // When angle is good enough, resume normal thrust
+        else {
+            System.err.println("$podType: Hairpin turn: Resuming thrust. Angle diff: $angleDiff")
+            return HAIRPIN_HIGH_THRUST
+        }
+    }
+
+    // Calculate base thrust based on angle and distance
+    protected fun calculateBaseThrust(angleDiff: Double, squaredDistance: Double): Int {
+        return when {
+            angleDiff > 90 -> 0
+            angleDiff > 50 -> 50
+            squaredDistance < 1000000 -> 70 // 1000^2 = 1000000
+            else -> 100
+        }
+    }
+
+    // Check if the pod is currently inside a checkpoint
+    protected fun isInsideCheckpoint(checkpoint: Checkpoint): Boolean {
+        return Point.isInsideCircle(
+            posX,
+            posY,
+            checkpoint.position.x,
+            checkpoint.position.y,
+            CHECKPOINT_RADIUS
+        )
+    }
+
+    // Check if the pod is at the exact x,y position of the checkpoint
+    protected fun isAtExactCheckpointPosition(checkpoint: Checkpoint): Boolean {
+        // Define a small tolerance for "exact" position (e.g., within 5 units)
+        val tolerance = 5
+        return abs(posX - checkpoint.position.x) <= tolerance && 
+               abs(posY - checkpoint.position.y) <= tolerance
+    }
+
     fun getCommand(): String {
         return when {
             useShield -> "$targetX $targetY SHIELD SHIELD"
@@ -486,20 +551,6 @@ class RacerPod(
     nextCheckpointId: Int,
     shieldCooldown: Int = 0
 ) : MyPod(position, velocity, angle, nextCheckpointId, shieldCooldown) {
-
-    // Track checkpoint count for home run detection
-    private var checkpointCount = 0
-    private var lastCheckpointId = 0
-
-    override fun update(x: Int, y: Int, vx: Int, vy: Int, angle: Int, nextCheckpointId: Int) {
-        // Track checkpoint changes to count laps
-        if (this.nextCheckpointId != nextCheckpointId) {
-            checkpointCount++
-            lastCheckpointId = this.nextCheckpointId
-        }
-
-        super.update(x, y, vx, vy, angle, nextCheckpointId)
-    }
 
     override fun calculateTarget(checkpoints: List<Checkpoint>, checkpointCount: Int) {
         val currentCheckpoint = checkpoints[nextCheckpointId]
@@ -587,31 +638,12 @@ class RacerPod(
 
         // Cornering sequence for hairpin turns
         if (isHairpin) {
-            // If we're in a sharp turn and the angle is large, turn off the engine
-            if (angleDiff > 70) {
-                thrust = 0
-                System.err.println("Hairpin turn: Engine off, rotating only. Angle diff: $angleDiff")
-            } 
-            // Once we've rotated enough, gradually increase thrust
-            else if (angleDiff > 40) {
-                thrust = 30
-                System.err.println("Hairpin turn: Minimal thrust during turn. Angle diff: $angleDiff")
-            }
-            // When angle is good enough, resume normal thrust
-            else {
-                thrust = 100
-                System.err.println("Hairpin turn: Resuming thrust. Angle diff: $angleDiff")
-            }
+            thrust = handleHairpinTurn(angleDiff, "RACER")
         } 
         // Normal thrust calculation for non-hairpin turns
         else {
             // Determine base thrust based on angle and distance
-            val baseThrust = when {
-                angleDiff > 90 -> 0
-                angleDiff > 50 -> 50
-                squaredDistance < 1000000 -> 70 // 1000^2 = 1000000
-                else -> 100
-            }
+            val baseThrust = calculateBaseThrust(angleDiff, squaredDistance)
 
             // Adjust thrust based on inertia
             thrust = adjustThrustForInertia(baseThrust, currentCheckpoint)
@@ -642,39 +674,6 @@ class BlockerPod(
     nextCheckpointId: Int,
     shieldCooldown: Int = 0
 ) : MyPod(position, velocity, angle, nextCheckpointId, shieldCooldown) {
-
-    // Track checkpoint count for home run detection
-    private var checkpointCount = 0
-    private var lastCheckpointId = 0
-
-    override fun update(x: Int, y: Int, vx: Int, vy: Int, angle: Int, nextCheckpointId: Int) {
-        // Track checkpoint changes to count laps
-        if (this.nextCheckpointId != nextCheckpointId) {
-            checkpointCount++
-            lastCheckpointId = this.nextCheckpointId
-        }
-
-        super.update(x, y, vx, vy, angle, nextCheckpointId)
-    }
-
-    // Check if the pod is currently inside a checkpoint
-    private fun isInsideCheckpoint(checkpoint: Checkpoint): Boolean {
-        return Point.isInsideCircle(
-            posX,
-            posY,
-            checkpoint.position.x,
-            checkpoint.position.y,
-            CHECKPOINT_RADIUS
-        )
-    }
-
-    // Check if the pod is at the exact x,y position of the checkpoint
-    private fun isAtExactCheckpointPosition(checkpoint: Checkpoint): Boolean {
-        // Define a small tolerance for "exact" position (e.g., within 5 units)
-        val tolerance = 5
-        return abs(posX - checkpoint.position.x) <= tolerance && 
-               abs(posY - checkpoint.position.y) <= tolerance
-    }
 
     // Using isHairpinTurn from parent class
 
@@ -761,29 +760,10 @@ class BlockerPod(
 
         // Cornering sequence for hairpin turns
         if (isHairpin) {
-            // If we're in a sharp turn and the angle is large, turn off the engine
-            if (angleDiff > 70) {
-                thrust = 0
-                System.err.println("BLOCKER: Hairpin turn: Engine off, rotating only. Angle diff: $angleDiff")
-            } 
-            // Once we've rotated enough, gradually increase thrust
-            else if (angleDiff > 40) {
-                thrust = 30
-                System.err.println("BLOCKER: Hairpin turn: Minimal thrust during turn. Angle diff: $angleDiff")
-            }
-            // When angle is good enough, resume normal thrust
-            else {
-                thrust = 100
-                System.err.println("BLOCKER: Hairpin turn: Resuming thrust. Angle diff: $angleDiff")
-            }
+            thrust = handleHairpinTurn(angleDiff, "BLOCKER")
         } else {
             // Adjust thrust based on distance, angle, and inertia
-            val baseThrust = when {
-                angleDiff > 90 -> 0
-                angleDiff > 50 -> 50
-                squaredDistance < 1000000 -> 70 // 1000^2 = 1000000
-                else -> 100
-            }
+            val baseThrust = calculateBaseThrust(angleDiff, squaredDistance)
 
             // Apply inertia correction to thrust
             thrust = adjustThrustForInertia(baseThrust, secondCheckpoint)
