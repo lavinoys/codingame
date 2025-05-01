@@ -149,7 +149,7 @@ abstract class MyPod(
     var useBoost: Boolean = false
 
     // Collision prediction parameters
-    val collisionRadius = 400 // Radius to consider for collision (pod radius is 400)
+    val collisionRadius = POD_SIZE.toInt() // Radius to consider for collision
     val collisionTimeThreshold = 3 // Number of turns to look ahead for collision prediction
     val collisionProbabilityThreshold = 0.7 // Probability threshold to activate shield
 
@@ -181,7 +181,7 @@ abstract class MyPod(
 
         // Make collision radius dynamic based on relative speed
         // Higher speeds need larger collision radius to account for movement between turns
-        val dynamicCollisionRadius = collisionRadius + (relativeSpeed * 0.5).toInt().coerceAtMost(400)
+        val dynamicCollisionRadius = collisionRadius + (relativeSpeed * 0.5).toInt().coerceAtMost(POD_SIZE.toInt())
 
         // Calculate quadratic equation coefficients for collision time
         // ||p + vt|| = r, where p is relative position, v is relative velocity, r is collision radius
@@ -243,7 +243,7 @@ abstract class MyPod(
             if (collisionTime < 5) {  // Only log if collision is within 5 turns
                 val distance = Point.distanceBetween(posX, posY, opponentPod.posX, opponentPod.posY)
                 val relativeSpeed = getRelativeSpeed(opponentPod)
-                val dynamicRadius = collisionRadius + (relativeSpeed * 0.5).toInt().coerceAtMost(400)
+                val dynamicRadius = collisionRadius + (relativeSpeed * 0.5).toInt().coerceAtMost(POD_SIZE.toInt())
                 System.err.println("Collision prediction: Time=$collisionTime, Prob=$probability, Dist=$distance, RelSpeed=$relativeSpeed, Radius=$dynamicRadius")
             }
 
@@ -287,8 +287,8 @@ abstract class MyPod(
         val velocityDirY = if (velocityMagnitude > 0) velocity.second / velocityMagnitude else 0.0
 
         // Calculate the target point ahead of the checkpoint
-        val targetX = (checkpoint.position.x + velocityDirX * lookAheadFactor * 600).toInt()
-        val targetY = (checkpoint.position.y + velocityDirY * lookAheadFactor * 600).toInt()
+        val targetX = (checkpoint.position.x + velocityDirX * lookAheadFactor * CHECKPOINT_RADIUS).toInt()
+        val targetY = (checkpoint.position.y + velocityDirY * lookAheadFactor * CHECKPOINT_RADIUS).toInt()
 
         return Pair(targetX, targetY)
     }
