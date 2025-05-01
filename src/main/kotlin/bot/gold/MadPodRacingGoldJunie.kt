@@ -68,9 +68,6 @@ open class BasePod(
         const val CHECKPOINT_RADIUS = 600.0
     }
 
-    fun distanceToCheckpoint(checkpoint: Checkpoint): Double = 
-        Point.distanceBetween(posX, posY, checkpoint.position.x, checkpoint.position.y)
-
     // Squared distance for comparison purposes (optimization)
     fun squaredDistanceToCheckpoint(checkpoint: Checkpoint): Double = 
         Point.squaredDistanceBetween(posX, posY, checkpoint.position.x, checkpoint.position.y)
@@ -272,9 +269,18 @@ abstract class MyPod(
         return false
     }
 
-    // Abstract methods to be implemented by subclasses
-    abstract fun calculateTarget(checkpoints: List<Checkpoint>, checkpointCount: Int)
-    abstract fun calculateThrust(checkpoints: List<Checkpoint>, turn: Int, opponentPods: List<OpponentPod>, sharedBoostAvailable: Boolean)
+    // Methods that can be overridden by subclasses
+    open fun calculateTarget(checkpoints: List<Checkpoint>, checkpointCount: Int) {
+        // Default implementation - does nothing
+        // Subclasses should override this method if they need to calculate targets
+        System.err.println("MyPod: Default calculateTarget implementation")
+    }
+
+    open fun calculateThrust(checkpoints: List<Checkpoint>, turn: Int, opponentPods: List<OpponentPod>, sharedBoostAvailable: Boolean) {
+        // Default implementation - does nothing
+        // Subclasses should override this method if they need to calculate thrust
+        System.err.println("MyPod: Default calculateThrust implementation")
+    }
 
     // Calculate a target point ahead of the checkpoint based on inertia
     protected fun calculateInertiaAdjustedTarget(checkpoint: Checkpoint): Pair<Int, Int> {
@@ -383,7 +389,6 @@ class RacerPod(
         val currentCheckpoint = checkpoints[nextCheckpointId]
         val nextCheckpointIndex = (nextCheckpointId + 1) % checkpointCount
         val nextCheckpoint = checkpoints[nextCheckpointIndex]
-        val distance = distanceToCheckpoint(currentCheckpoint)
 
         // Get checkpoint coordinates directly
         val currentX = currentCheckpoint.position.x
@@ -604,18 +609,10 @@ class BlockerPod(
     }
 
 
-    override fun calculateTarget(checkpoints: List<Checkpoint>, checkpointCount: Int) {
-        // Empty implementation - BlockerPod no longer navigates to checkpoints
-        // Target will be set by calculateBlockerTarget method
-        System.err.println("BlockerPod: Not targeting checkpoints, only blocking opponents")
-    }
+    // BlockerPod uses the default implementations of calculateTarget and calculateThrust from MyPod
+    // The actual blocking logic is implemented in calculateBlockerTarget
 
-    override fun calculateThrust(checkpoints: List<Checkpoint>, turn: Int, opponentPods: List<OpponentPod>, sharedBoostAvailable: Boolean) {
-        // This method is required by the abstract class but not used
-        // The actual implementation is in calculateBlockerTarget
-    }
-
-    fun calculateBlockerTarget(leadingOpponent: OpponentPod, racerPod: RacerPod, checkpoints: List<Checkpoint>) {
+    fun calculateBlockerTarget(leadingOpponent: OpponentPod, racerPod: RacerPod) {
         // Reset flags
         if (shieldActive == 0) {  // Only reset if shield is not active
             useShield = false
@@ -796,7 +793,7 @@ fun main() {
         val blockerPod = myPods[1] as BlockerPod
 
         // BlockerPod only focuses on blocking opponents, not checkpoint racing
-        blockerPod.calculateBlockerTarget(leadingOpponent, racerPod, checkpoints)
+        blockerPod.calculateBlockerTarget(leadingOpponent, racerPod)
 
 
         // Output commands for both pods
