@@ -603,135 +603,11 @@ class BlockerPod(
         super.update(x, y, vx, vy, angle, nextCheckpointId)
     }
 
-    // Detect if we're approaching a hairpin turn (same as RacerPod)
-    private fun isHairpinTurn(checkpoints: List<Checkpoint>, checkpointCount: Int): Boolean {
-        val currentCheckpoint = checkpoints[nextCheckpointId]
-        val nextCheckpointIndex = (nextCheckpointId + 1) % checkpointCount
-        val nextCheckpoint = checkpoints[nextCheckpointIndex]
-
-        // Calculate the angle between current checkpoint and next checkpoint
-        val vectorToCurrent = Point(
-            currentCheckpoint.position.x - posX,
-            currentCheckpoint.position.y - posY
-        )
-        val vectorToNext = Point(
-            nextCheckpoint.position.x - currentCheckpoint.position.x,
-            nextCheckpoint.position.y - currentCheckpoint.position.y
-        )
-
-        // Calculate the angle between these vectors
-        val dotProduct = vectorToCurrent.x * vectorToNext.x + vectorToCurrent.y * vectorToNext.y
-        val magnitudeCurrent = sqrt(vectorToCurrent.x.toDouble().pow(2) + vectorToCurrent.y.toDouble().pow(2))
-        val magnitudeNext = sqrt(vectorToNext.x.toDouble().pow(2) + vectorToNext.y.toDouble().pow(2))
-
-        // Avoid division by zero
-        if (magnitudeCurrent < 0.001 || magnitudeNext < 0.001) {
-            return false
-        }
-
-        val cosAngle = dotProduct / (magnitudeCurrent * magnitudeNext)
-        // Clamp to avoid domain errors with acos
-        val clampedCosAngle = cosAngle.coerceIn(-1.0, 1.0)
-        val angleBetweenCheckpoints = Math.toDegrees(acos(clampedCosAngle))
-
-        // If the angle is large (> 90 degrees) and we're close to the current checkpoint, it's a hairpin
-        val squaredDistance = squaredDistanceToCheckpoint(currentCheckpoint)
-        val isCloseToCheckpoint = squaredDistance < 4000000 // 2000^2 = 4000000
-        val isLargeAngle = angleBetweenCheckpoints > 90
-
-        if (isLargeAngle && isCloseToCheckpoint) {
-            // For logging, get the actual distance
-            val distance = sqrt(squaredDistance)
-            System.err.println("BlockerPod: Detected hairpin turn! Angle between checkpoints: $angleBetweenCheckpoints, Distance: $distance")
-            return true
-        }
-
-        return false
-    }
 
     override fun calculateTarget(checkpoints: List<Checkpoint>, checkpointCount: Int) {
-        // For blocker, optimize trajectory to current checkpoint when not actively blocking
-        val currentCheckpoint = checkpoints[nextCheckpointId]
-        val nextCheckpointIndex = (nextCheckpointId + 1) % checkpointCount
-        val nextCheckpoint = checkpoints[nextCheckpointIndex]
-        val squaredDistance = squaredDistanceToCheckpoint(currentCheckpoint)
-
-        // Check if we're going for the home run (final lap, final checkpoint)
-        val isGoingForHomeRun = this.checkpointCount == (checkpointCount * 3)
-
-        if (isGoingForHomeRun) {
-            System.err.println("BlockerPod: Going for the home run!")
-            targetX = currentCheckpoint.position.x
-            targetY = currentCheckpoint.position.y
-            return
-        }
-
-        // If we're about to enter the checkpoint, aim for the next one
-        if (isGoingToEnterCheckpointSoon(checkpoints)) {
-            targetX = nextCheckpoint.position.x
-            targetY = nextCheckpoint.position.y
-
-            val angleDiff = Math.abs(angleToCheckpoint(nextCheckpoint))
-            System.err.println("BlockerPod: Drifting towards next checkpoint, angle diff: $angleDiff")
-            return
-        }
-
-        // Calculate position delta and future position
-        val positionDelta = Pair(
-            (velocity.first * FRICTION).toInt(),
-            (velocity.second * FRICTION).toInt()
-        )
-        val distanceTravelledOnPreviousFrame = sqrt(
-            positionDelta.first.toDouble().pow(2) + 
-            positionDelta.second.toDouble().pow(2)
-        )
-        val futurePos = Point(posX + positionDelta.first, posY + positionDelta.second)
-
-        // Optimize trajectory using closestPointToLine if we're moving fast enough
-        val angleDiff = Math.abs(angleToCheckpoint(currentCheckpoint))
-        val futureDistanceSquared = Point.squaredDistanceBetween(
-            futurePos.x, futurePos.y, 
-            currentCheckpoint.position.x, currentCheckpoint.position.y
-        )
-        val currentDistanceSquared = Point.squaredDistanceBetween(
-            posX, posY, 
-            currentCheckpoint.position.x, currentCheckpoint.position.y
-        )
-
-        if (distanceTravelledOnPreviousFrame > 50 && 
-            angleDiff < 70 && 
-            futureDistanceSquared < currentDistanceSquared) {
-
-            // Use closestPointToLine to optimize trajectory
-            val currentPos = Point(posX, posY)
-            val aux = Point.closestPointToLine(currentPos, currentCheckpoint.position, futurePos)
-            val aux2 = Point(
-                aux.x + (aux.x - futurePos.x),
-                aux.y + (aux.y - futurePos.y)
-            )
-
-            targetX = aux2.x
-            targetY = aux2.y
-            System.err.println("BlockerPod: Optimizing trajectory using closestPointToLine")
-            return
-        }
-
-        // Default behavior - use inertia correction to aim ahead of the checkpoint
-        if (squaredDistance < 1440000) { // 1200^2 = 1440000
-            // If close to checkpoint, aim for the next one with inertia correction
-            val nextCheckpointX = nextCheckpoint.position.x
-            val nextCheckpointY = nextCheckpoint.position.y
-
-            // Calculate vector directly with some bias towards the next checkpoint
-            targetX = (currentCheckpoint.position.x + (nextCheckpointX - currentCheckpoint.position.x) * 0.3).toInt()
-            targetY = (currentCheckpoint.position.y + (nextCheckpointY - currentCheckpoint.position.y) * 0.3).toInt()
-        } else {
-            // Apply inertia correction - aim ahead of the checkpoint based on our velocity
-            val (adjustedX, adjustedY) = calculateInertiaAdjustedTarget(currentCheckpoint)
-            targetX = adjustedX
-            targetY = adjustedY
-            System.err.println("BlockerPod: Using inertia correction, aiming at ($targetX, $targetY) instead of (${currentCheckpoint.position.x}, ${currentCheckpoint.position.y})")
-        }
+        // Empty implementation - BlockerPod no longer navigates to checkpoints
+        // Target will be set by calculateBlockerTarget method
+        System.err.println("BlockerPod: Not targeting checkpoints, only blocking opponents")
     }
 
     override fun calculateThrust(checkpoints: List<Checkpoint>, turn: Int, opponentPods: List<OpponentPod>, sharedBoostAvailable: Boolean) {
@@ -746,71 +622,41 @@ class BlockerPod(
         }
         useBoost = false
 
-        // Check if we're in a hairpin turn
-        val isHairpin = isHairpinTurn(checkpoints, checkpoints.size)
-        val currentCheckpoint = checkpoints[nextCheckpointId]
-        val angleDiff = Math.abs(angleToCheckpoint(currentCheckpoint))
+        // First rule: Check if we're going to interfere with our racer pod
+        val (collisionTimeWithRacer, probabilityWithRacer) = predictCollision(racerPod)
+        val distanceToRacerSquared = Point.squaredDistanceBetween(posX, posY, racerPod.posX, racerPod.posY)
 
-        // Cornering sequence for hairpin turns
-        if (isHairpin) {
-            // If we're in a sharp turn and the angle is large, turn off the engine
-            if (angleDiff > 70) {
-                thrust = 0
-                System.err.println("BLOCKER: Hairpin turn: Engine off, rotating only. Angle diff: $angleDiff")
-            } 
-            // Once we've rotated enough, gradually increase thrust
-            else if (angleDiff > 40) {
-                thrust = 30
-                System.err.println("BLOCKER: Hairpin turn: Minimal thrust during turn. Angle diff: $angleDiff")
-            }
-            // When angle is good enough, resume normal thrust
-            else {
+        // If we're likely to collide with our racer pod, avoid it
+        if (collisionTimeWithRacer < 3 && probabilityWithRacer > 0.5 && distanceToRacerSquared < 4000000) { // 2000^2 = 4000000
+            System.err.println("BLOCKER: Avoiding collision with racer pod! Time=$collisionTimeWithRacer, Prob=$probabilityWithRacer")
+
+            // Calculate a target that avoids the racer pod
+            // Move perpendicular to the line connecting the two pods
+            val dirX = racerPod.posX - posX
+            val dirY = racerPod.posY - posY
+            val length = sqrt(dirX.toDouble().pow(2) + dirY.toDouble().pow(2))
+
+            if (length > 0) {
+                // Calculate perpendicular vector (rotate 90 degrees)
+                val perpX = -dirY / length
+                val perpY = dirX / length
+
+                // Set target away from racer pod
+                targetX = posX + (perpX * 1000).toInt()
+                targetY = posY + (perpY * 1000).toInt()
                 thrust = 100
-                System.err.println("BLOCKER: Hairpin turn: Resuming thrust. Angle diff: $angleDiff")
+                return
             }
-
-            // During hairpin turns, focus on the checkpoint rather than blocking
-            val (adjustedX, adjustedY) = calculateInertiaAdjustedTarget(currentCheckpoint)
-            targetX = adjustedX
-            targetY = adjustedY
-        } 
-        else {
-            // First rule: Check if we're going to interfere with our racer pod
-            val (collisionTimeWithRacer, probabilityWithRacer) = predictCollision(racerPod)
-            val distanceToRacerSquared = Point.squaredDistanceBetween(posX, posY, racerPod.posX, racerPod.posY)
-
-            // If we're likely to collide with our racer pod, avoid it
-            if (collisionTimeWithRacer < 3 && probabilityWithRacer > 0.5 && distanceToRacerSquared < 4000000) { // 2000^2 = 4000000
-                System.err.println("BLOCKER: Avoiding collision with racer pod! Time=$collisionTimeWithRacer, Prob=$probabilityWithRacer")
-
-                // Calculate a target that avoids the racer pod
-                // Move perpendicular to the line connecting the two pods
-                val dirX = racerPod.posX - posX
-                val dirY = racerPod.posY - posY
-                val length = sqrt(dirX.toDouble().pow(2) + dirY.toDouble().pow(2))
-
-                if (length > 0) {
-                    // Calculate perpendicular vector (rotate 90 degrees)
-                    val perpX = -dirY / length
-                    val perpY = dirX / length
-
-                    // Set target away from racer pod
-                    targetX = posX + (perpX * 1000).toInt()
-                    targetY = posY + (perpY * 1000).toInt()
-                    thrust = 100
-                    return
-                }
-            }
-
-            // Second rule: Normal blocking behavior - aim to intercept the leading opponent
-            // Use inertia correction to predict where the opponent will be
-            val opponentSpeed = leadingOpponent.getCurrentSpeed()
-            val lookAheadFactor = (opponentSpeed / 100.0).coerceAtMost(2.0)
-
-            targetX = leadingOpponent.posX + (leadingOpponent.velocity.first * lookAheadFactor).toInt()
-            targetY = leadingOpponent.posY + (leadingOpponent.velocity.second * lookAheadFactor).toInt()
-            thrust = 100
         }
+
+        // Second rule: Normal blocking behavior - aim to intercept the leading opponent
+        // Use inertia correction to predict where the opponent will be
+        val opponentSpeed = leadingOpponent.getCurrentSpeed()
+        val lookAheadFactor = (opponentSpeed / 100.0).coerceAtMost(2.0)
+
+        targetX = leadingOpponent.posX + (leadingOpponent.velocity.first * lookAheadFactor).toInt()
+        targetY = leadingOpponent.posY + (leadingOpponent.velocity.second * lookAheadFactor).toInt()
+        thrust = 100
 
         // For blocker pod, check for imminent collision with the target opponent
         // and activate shield preemptively if we're on an intercept course
@@ -949,10 +795,7 @@ fun main() {
         // Strategy for second pod (Blocker/Interceptor)
         val blockerPod = myPods[1] as BlockerPod
 
-        // First calculate normal target (for checkpoint racing)
-        blockerPod.calculateTarget(checkpoints, checkpointCount)
-
-        // Then override with blocker target if appropriate
+        // BlockerPod only focuses on blocking opponents, not checkpoint racing
         blockerPod.calculateBlockerTarget(leadingOpponent, racerPod, checkpoints)
 
 
