@@ -619,6 +619,14 @@ class BlockerPod(
         )
     }
 
+    // Check if the pod is at the exact x,y position of the checkpoint
+    private fun isAtExactCheckpointPosition(checkpoint: Checkpoint): Boolean {
+        // Define a small tolerance for "exact" position (e.g., within 5 units)
+        val tolerance = 5
+        return abs(posX - checkpoint.position.x) <= tolerance && 
+               abs(posY - checkpoint.position.y) <= tolerance
+    }
+
     // Detect if we're approaching a hairpin turn
     private fun isHairpinTurn(checkpoints: List<Checkpoint>, checkpointCount: Int): Boolean {
         val currentCheckpoint = checkpoints[nextCheckpointId]
@@ -671,13 +679,23 @@ class BlockerPod(
         val secondCheckpointIndex = 1 % checkpointCount  // Use modulo to handle case where there are fewer than 2 checkpoints
         val secondCheckpoint = checkpoints[secondCheckpointIndex]
 
-        // If the pod is inside the checkpoint, set thrust to 0 to "camp" there
-        if (isInsideCheckpoint(secondCheckpoint)) {
-            // Set target to exact coordinates of the checkpoint when camping
+        // If the pod is at the exact x,y position of the checkpoint, activate shield
+        if (isAtExactCheckpointPosition(secondCheckpoint)) {
+            // Set target to exact coordinates of the checkpoint
             targetX = secondCheckpoint.position.x
             targetY = secondCheckpoint.position.y
             thrust = 0
-            System.err.println("BLOCKER: Camping at second checkpoint (checkpointCount=$checkpointCount)")
+            useShield = true
+            System.err.println("BLOCKER: At exact checkpoint position, activating shield (checkpointCount=$checkpointCount)")
+            return
+        }
+        // If the pod is inside the checkpoint but not at the exact position, go to the exact position
+        else if (isInsideCheckpoint(secondCheckpoint)) {
+            // Set target to exact coordinates of the checkpoint
+            targetX = secondCheckpoint.position.x
+            targetY = secondCheckpoint.position.y
+            thrust = 20  // Low thrust to move precisely
+            System.err.println("BLOCKER: Inside checkpoint but not at exact position, moving to exact position (checkpointCount=$checkpointCount)")
             return
         }
 
