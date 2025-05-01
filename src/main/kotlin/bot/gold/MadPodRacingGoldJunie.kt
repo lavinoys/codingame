@@ -168,16 +168,16 @@ abstract class MyPod(
         }
     }
 
-    // Predict collision with opponent pods
-    protected fun predictCollision(opponentPod: OpponentPod): Pair<Double, Double> {
+    // Predict collision with any pod
+    protected fun predictCollision(otherPod: BasePod): Pair<Double, Double> {
         // Calculate relative position and velocity
-        val relativeX = opponentPod.posX - posX
-        val relativeY = opponentPod.posY - posY
-        val relativeVX = opponentPod.velocity.first - velocity.first
-        val relativeVY = opponentPod.velocity.second - velocity.second
+        val relativeX = otherPod.posX - posX
+        val relativeY = otherPod.posY - posY
+        val relativeVX = otherPod.velocity.first - velocity.first
+        val relativeVY = otherPod.velocity.second - velocity.second
 
         // Calculate relative speed
-        val relativeSpeed = getRelativeSpeed(opponentPod)
+        val relativeSpeed = getRelativeSpeed(otherPod)
 
         // Make collision radius dynamic based on relative speed
         // Higher speeds need larger collision radius to account for movement between turns
@@ -725,7 +725,7 @@ class BlockerPod(
         // The actual implementation is in calculateBlockerTarget
     }
 
-    fun calculateBlockerTarget(leadingOpponent: OpponentPod, checkpoints: List<Checkpoint>) {
+    fun calculateBlockerTarget(leadingOpponent: OpponentPod, racerPod: RacerPod, checkpoints: List<Checkpoint>) {
         // Reset flags
         if (shieldActive == 0) {  // Only reset if shield is not active
             useShield = false
@@ -761,7 +761,34 @@ class BlockerPod(
             targetY = adjustedY
         } 
         else {
-            // Normal blocking behavior - aim to intercept the leading opponent
+            // First rule: Check if we're going to interfere with our racer pod
+            val (collisionTimeWithRacer, probabilityWithRacer) = predictCollision(racerPod)
+            val distanceToRacer = Point.distanceBetween(posX, posY, racerPod.posX, racerPod.posY)
+
+            // If we're likely to collide with our racer pod, avoid it
+            if (collisionTimeWithRacer < 3 && probabilityWithRacer > 0.5 && distanceToRacer < 2000) {
+                System.err.println("BLOCKER: Avoiding collision with racer pod! Time=$collisionTimeWithRacer, Prob=$probabilityWithRacer")
+
+                // Calculate a target that avoids the racer pod
+                // Move perpendicular to the line connecting the two pods
+                val dirX = racerPod.posX - posX
+                val dirY = racerPod.posY - posY
+                val length = sqrt(dirX.toDouble().pow(2) + dirY.toDouble().pow(2))
+
+                if (length > 0) {
+                    // Calculate perpendicular vector (rotate 90 degrees)
+                    val perpX = -dirY / length
+                    val perpY = dirX / length
+
+                    // Set target away from racer pod
+                    targetX = posX + (perpX * 1000).toInt()
+                    targetY = posY + (perpY * 1000).toInt()
+                    thrust = 100
+                    return
+                }
+            }
+
+            // Second rule: Normal blocking behavior - aim to intercept the leading opponent
             // Use inertia correction to predict where the opponent will be
             val opponentSpeed = leadingOpponent.getCurrentSpeed()
             val lookAheadFactor = (opponentSpeed / 100.0).coerceAtMost(2.0)
@@ -912,7 +939,7 @@ fun main() {
         blockerPod.calculateTarget(checkpoints, checkpointCount)
 
         // Then override with blocker target if appropriate
-        blockerPod.calculateBlockerTarget(leadingOpponent, checkpoints)
+        blockerPod.calculateBlockerTarget(leadingOpponent, racerPod, checkpoints)
 
 
         // Output commands for both pods
