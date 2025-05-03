@@ -10,7 +10,7 @@ data class Point(val index: Int, val x: Int, val y: Int)
  * Auto-generated code below aims at helping you parse
  * the standard input according to the problem statement.
  **/
-fun main(args : Array<String>) {
+fun main() {
     val input = Scanner(System.`in`)
     val N = input.nextInt() // This variables stores how many nodes are given
     val points = mutableListOf<Point>()
@@ -70,7 +70,7 @@ fun nearestNeighborPath(points: List<Point>): List<Point> {
     visited[0] = true
 
     // 나머지 n-1개 점을 방문
-    for (i in 1 until n) {
+    (1..n).forEach { _ ->
         var nearestPoint: Point? = null
         var minDistance = Double.MAX_VALUE
 
