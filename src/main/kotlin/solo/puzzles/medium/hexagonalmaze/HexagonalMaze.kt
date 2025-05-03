@@ -1,4 +1,4 @@
-package solo.hexagonalmaze
+package solo.puzzles.medium.hexagonalmaze
 
 import java.util.ArrayDeque
 

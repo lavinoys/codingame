@@ -24,7 +24,9 @@ class SnakeGame {
     private val snake = mutableListOf<Point>()
     private val mapWidth = 96
     private val mapHeight = 54
-
+    private var turnsSinceLastRabbit = 0
+    private var snakeBodySet = HashSet<Point>()  // 성능 향상을 위한 뱀 몸체 집합
+    
     fun addRabbit(x: Int, y: Int) {
         rabbits.add(Point(x, y))
     }
@@ -32,6 +34,14 @@ class SnakeGame {
     fun updateSnake(snakeParts: List<Point>) {
         snake.clear()
         snake.addAll(snakeParts)
+        
+        // 뱀 몸체 집합 업데이트
+        snakeBodySet.clear()
+        for (i in 1 until snake.size) { // 머리 제외
+            snakeBodySet.add(snake[i])
+        }
+        
+        turnsSinceLastRabbit++
     }
 
     private fun isCollision(point: Point): Boolean {
@@ -40,14 +50,8 @@ class SnakeGame {
             return true
         }
 
-        // 뱀 몸체와 충돌 체크 (머리 제외)
-        for (i in 1 until snake.size) {
-            if (snake[i].x == point.x && snake[i].y == point.y) {
-                return true
-            }
-        }
-
-        return false
+        // 뱀 몸체와 충돌 체크 - O(1) 시간 복잡도로 향상
+        return point in snakeBodySet
     }
 
     fun getNextMove(): Point {
@@ -58,73 +62,123 @@ class SnakeGame {
             return findSafeMove() ?: Point(head.x + 1, head.y)
         }
 
-        // 토끼를 향한 A* 경로 찾기
-        val path = findPathToNearestRabbit()
+        // 최적의 토끼를 선택하고 경로 찾기
+        val path = findPathToOptimalRabbit()
         return path ?: findSafeMove() ?: Point(head.x + 1, head.y)
     }
 
     private fun findSafeMove(): Point? {
         val head = snake[0]
-        return head.neighbors().firstOrNull { !isCollision(it) }
+        val moves = head.neighbors()
+        
+        // 안전한 이동 중에서 가장 많은 이동 옵션을 제공하는 이동 선택
+        return moves
+            .filter { !isCollision(it) }
+            .maxByOrNull { neighbor -> 
+                neighbor.neighbors().count { !isCollision(it) }
+            }
     }
-
-    private fun findPathToNearestRabbit(): Point? {
-        // 가장 가까운 토끼 찾기
+    
+    private fun findPathToOptimalRabbit(): Point? {
         val head = snake[0]
-        val targetRabbit = rabbits.minByOrNull { it.distance(head) } ?: return null
+        
+        // 단순 거리가 아닌 더 복잡한 기준으로 토끼 선택
+        val targetRabbit = selectOptimalRabbit() ?: return null
 
-        // A* 알고리즘으로 경로 찾기
-        val openSet = PriorityQueue<Pair<Point, Int>> { a, b -> a.second - b.second }
+        // 향상된 A* 알고리즘
+        val openSet = PriorityQueue<PathNode> { a, b -> a.fScore - b.fScore }
         val closedSet = HashSet<Point>()
+        val gScore = HashMap<Point, Int>()
         val cameFrom = HashMap<Point, Point>()
-        val gScore = HashMap<Point, Int>().withDefault { Int.MAX_VALUE }
-        val fScore = HashMap<Point, Int>().withDefault { Int.MAX_VALUE }
-
-        openSet.add(Pair(head, 0))
+        
         gScore[head] = 0
-        fScore[head] = head.distance(targetRabbit)
-
+        openSet.add(PathNode(head, 0, head.distance(targetRabbit)))
+        
         while (openSet.isNotEmpty()) {
-            val current = openSet.poll().first
-
-            if (current.x == targetRabbit.x && current.y == targetRabbit.y) {
-                // 토끼에 도달했으면 첫 이동 위치 반환
+            val current = openSet.poll().point
+            
+            if (current == targetRabbit) {
+                // 경로 역추적
                 var path = current
                 while (cameFrom[path] != head) {
                     path = cameFrom[path]!!
                 }
                 return path
             }
-
+            
             closedSet.add(current)
-
+            
             for (neighbor in current.neighbors()) {
-                if (isCollision(neighbor) || neighbor in closedSet) continue
-
-                val tentativeGScore = gScore.getValue(current) + 1
-
-                if (tentativeGScore < gScore.getValue(neighbor)) {
+                if (neighbor in closedSet || isCollision(neighbor)) continue
+                
+                val tentativeGScore = gScore.getOrDefault(current, Int.MAX_VALUE) + 1
+                
+                if (tentativeGScore < gScore.getOrDefault(neighbor, Int.MAX_VALUE)) {
                     cameFrom[neighbor] = current
                     gScore[neighbor] = tentativeGScore
-                    fScore[neighbor] = tentativeGScore + neighbor.distance(targetRabbit)
-
-                    if (neighbor !in openSet.map { it.first }) {
-                        openSet.add(Pair(neighbor, fScore.getValue(neighbor)))
-                    }
+                    val fScore = tentativeGScore + neighbor.distance(targetRabbit)
+                    
+                    // 이미 openSet에 있는지 확인할 필요 없이 그냥 추가
+                    // 우선순위 큐가 자동으로 최적의 노드를 앞으로 정렬함
+                    openSet.add(PathNode(neighbor, tentativeGScore, fScore))
                 }
             }
         }
-
-        // 경로를 찾지 못했을 때
+        
         return null
+    }
+    
+    private fun selectOptimalRabbit(): Point? {
+        if (rabbits.isEmpty()) return null
+        val head = snake[0]
+        
+        // 단순 거리만이 아닌 더 복잡한 기준으로 토끼 선택
+        // 오래 잡지 못한 토끼일수록 우선순위 증가
+        return rabbits.minByOrNull { rabbit ->
+            // 기본 거리에 턴 수에 따른 가중치 추가
+            val distance = rabbit.distance(head)
+            val urgency = if (turnsSinceLastRabbit > 8) turnsSinceLastRabbit * 2 else 0
+            
+            // 위험지역 회피 (벽에 너무 가깝거나 뱀에 둘러싸인 토끼는 피함)
+            val dangerFactor = calculateDangerFactor(rabbit)
+            
+            distance - urgency + dangerFactor
+        }
+    }
+    
+    private fun calculateDangerFactor(point: Point): Int {
+        // 벽과의 거리 확인
+        val wallDistance = min(
+            min(point.x, mapWidth - 1 - point.x),
+            min(point.y, mapHeight - 1 - point.y)
+        )
+        
+        // 벽에 너무 가까우면 위험 요소 증가
+        val wallDanger = if (wallDistance < 3) 5 else 0
+        
+        // 주변 뱀 몸체 부분 개수 확인
+        val surroundingBodyParts = point.neighbors().count { it in snakeBodySet }
+        val bodyDanger = surroundingBodyParts * 3
+        
+        return wallDanger + bodyDanger
     }
 
     // 토끼를 잡았는지 확인하고 제거
     fun checkAndRemoveRabbit() {
         val head = snake[0]
-        val caughtRabbit = rabbits.find { it.x == head.x && it.y == head.y }
-        caughtRabbit?.let { rabbits.remove(it) }
+        val caughtRabbit = rabbits.find { it == head }
+        if (caughtRabbit != null) {
+            rabbits.remove(caughtRabbit)
+            turnsSinceLastRabbit = 0
+        }
     }
+    
+    // A* 알고리즘을 위한 경로 노드 클래스
+    private data class PathNode(
+        val point: Point,
+        val gScore: Int,
+        val fScore: Int
+    )
 }
 
 fun main(args: Array<String>) {
