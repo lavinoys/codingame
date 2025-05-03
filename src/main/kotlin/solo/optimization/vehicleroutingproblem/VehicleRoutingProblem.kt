@@ -42,29 +42,40 @@ fun main() {
     println(formatSolution(finalSolution))
 }
 
-// 거리 캐시를 위한 맵
-private val distanceCache = mutableMapOf<Pair<Int, Int>, Int>()
+// 거리 캐시를 위한 맵 - 더 빠른 접근을 위해 Array 사용
+private lateinit var distanceCache: Array<Array<Int>>
+private var customerCount = 0
 
-// 거리 캐시 초기화
+// 거리 캐시 초기화 - 배열 기반으로 변경
 fun initDistanceCache(customers: List<Customer>) {
+    customerCount = customers.size
+    distanceCache = Array(customerCount) { Array(customerCount) { 0 } }
+    
+    val indexMap = customers.associateWith { customers.indexOf(it) }
+    
     for (i in customers.indices) {
         for (j in i + 1 until customers.size) {
             val a = customers[i]
             val b = customers[j]
             val dist = sqrt((a.x - b.x).toDouble().pow(2) + (a.y - b.y).toDouble().pow(2)).roundToInt()
-            distanceCache[Pair(a.index, b.index)] = dist
-            distanceCache[Pair(b.index, a.index)] = dist
+            
+            val idxA = indexMap[a] ?: i
+            val idxB = indexMap[b] ?: j
+            
+            distanceCache[idxA][idxB] = dist
+            distanceCache[idxB][idxA] = dist
         }
     }
 }
 
-// 두 지점 사이의 거리 계산 (캐시 이용)
+// 두 지점 사이의 거리 계산 (배열 기반 캐시 사용)
 fun distance(a: Customer, b: Customer): Int {
-    return distanceCache[Pair(a.index, b.index)] ?: run {
-        val dist = sqrt((a.x - b.x).toDouble().pow(2) + (a.y - b.y).toDouble().pow(2)).roundToInt()
-        distanceCache[Pair(a.index, b.index)] = dist
-        distanceCache[Pair(b.index, a.index)] = dist
-        dist
+    val idxA = a.index
+    val idxB = b.index
+    return if (idxA < customerCount && idxB < customerCount) {
+        distanceCache[idxA][idxB]
+    } else {
+        sqrt((a.x - b.x).toDouble().pow(2) + (a.y - b.y).toDouble().pow(2)).roundToInt()
     }
 }
 
@@ -135,43 +146,106 @@ fun calculateTotalDistance(depot: Customer, solution: List<List<Customer>>): Dou
     return totalDistance
 }
 
-// 시뮬레이티드 어닐링 알고리즘 (개선)
+// 시뮬레이티드 어닐링 알고리즘 (추가 최적화)
 fun simulatedAnnealing(depot: Customer, initialSolution: List<List<Customer>>, capacity: Int): List<List<Customer>> {
-    // 깊은 복사 대신 효율적인 변환
+    // 객체 생성 최소화를 위한 공유 버퍼 사용
     val currentSolution = initialSolution.map { it.toMutableList() }.toMutableList()
-    var bestSolution = initialSolution.map { it.toMutableList() }
+    val bestSolution = initialSolution.map { it.toMutableList() }.toMutableList()
+    val tempSolution = initialSolution.map { it.toMutableList() }.toMutableList()
+    
     var currentEnergy = calculateTotalDistance(depot, currentSolution)
     var bestEnergy = currentEnergy
     
-    // 개선된 온도 스케줄링
-    var temperature = 1000.0
-    val coolingRate = 0.997 // 더 천천히 냉각
-    val minTemperature = 0.01
+    // 시간 제약 및 최적화된 파라미터
+    var temperature = 500.0 // 낮은 온도에서 시작
+    val coolingRate = 0.99 // 더 빠른 냉각률
+    val minTemperature = 0.1 // 더 높은 최소 온도
     val startTime = System.currentTimeMillis()
-    val timeLimit = 7800 // 더 많은 시간 활용 (안전하게)
+    val timeLimit = 1500 // 제한 시간 축소
     
-    // 개선책 없이 지난 반복 횟수 카운트
+    var iterations = 0
     var noImprovementCount = 0
+    val neighborBufferA = currentSolution.map { it.toMutableList() }.toMutableList()
+    val neighborBufferB = currentSolution.map { it.toMutableList() }.toMutableList()
+    
+    // 현재 정책을 효과적인 방향으로 강제 조정
+    var swapWithinRouteWeight = 1
+    var moveBetweenRouteWeight = 1
+    var reverseSubrouteWeight = 1
+    var relocateCustomerWeight = 1
+    var swapBetweenRoutesWeight = 1
+    val operationSuccessCount = IntArray(5) { 0 }
     
     while (temperature > minTemperature && System.currentTimeMillis() - startTime < timeLimit) {
-        // 주기적으로 지역 최적화 적용
-        if (Random.nextInt(100) < 5) {
+        iterations++
+        
+        // 한 번에 여러 이웃 해결책을 생성하고 최선의 것만 선택
+        if (iterations % 100 == 0) {
+            // 각 연산 성공률에 따라 가중치 조정
+            val totalOps = operationSuccessCount.sum().coerceAtLeast(1)
+            if (totalOps > 0) {
+                swapWithinRouteWeight = ((operationSuccessCount[0] / totalOps.toDouble()) * 10).toInt().coerceAtLeast(1)
+                moveBetweenRouteWeight = ((operationSuccessCount[1] / totalOps.toDouble()) * 10).toInt().coerceAtLeast(1)
+                reverseSubrouteWeight = ((operationSuccessCount[2] / totalOps.toDouble()) * 10).toInt().coerceAtLeast(1)
+                relocateCustomerWeight = ((operationSuccessCount[3] / totalOps.toDouble()) * 10).toInt().coerceAtLeast(1)
+                swapBetweenRoutesWeight = ((operationSuccessCount[4] / totalOps.toDouble()) * 10).toInt().coerceAtLeast(1)
+            }
+        }
+        
+        // 지역 최적화 주기적 적용 - 빈도 줄임
+        if (iterations % 500 == 0) {
             applyLocalOptimization(currentSolution, depot)
             currentEnergy = calculateTotalDistance(depot, currentSolution)
         }
         
-        val newSolution = generateNeighbor(currentSolution, capacity)
-        val newEnergy = calculateTotalDistance(depot, newSolution)
+        // 이웃 생성 전 현재 해결책 백업
+        copySolution(currentSolution, neighborBufferA)
         
-        // 새 해결책이 더 좋거나 확률적으로 수락
+        // 가중치 기반 이웃 해결책 생성
+        val totalWeight = swapWithinRouteWeight + moveBetweenRouteWeight + 
+                         reverseSubrouteWeight + relocateCustomerWeight + swapBetweenRoutesWeight
+        val rand = Random.nextInt(totalWeight)
+        var opIdx = 0
+        var cumulativeWeight = 0
+        
+        for (i in 0 until 5) {
+            cumulativeWeight += when(i) {
+                0 -> swapWithinRouteWeight
+                1 -> moveBetweenRouteWeight
+                2 -> reverseSubrouteWeight
+                3 -> relocateCustomerWeight
+                else -> swapBetweenRoutesWeight
+            }
+            if (rand < cumulativeWeight) {
+                opIdx = i
+                break
+            }
+        }
+        
+        // 적용할 연산 선택
+        val success = when (opIdx) {
+            0 -> swapCustomersWithinRoute(neighborBufferA)
+            1 -> moveCustomerBetweenRoutes(neighborBufferA, capacity)
+            2 -> reverseSubroute(neighborBufferA)
+            3 -> relocateCustomer(neighborBufferA)
+            else -> swapCustomersBetweenRoutes(neighborBufferA)
+        }
+        
+        if (success) {
+            operationSuccessCount[opIdx]++
+        }
+        
+        // 이웃 해결책의 에너지 계산 - 최적화된 증분 계산 가능
+        val newEnergy = calculateTotalDistance(depot, neighborBufferA)
+        
+        // 새 해결책 수락 또는 거부
         if (acceptanceProbability(currentEnergy, newEnergy, temperature) > Random.nextDouble()) {
-            // 깊은 복사 대신 참조 변경
-            currentSolution.clear()
-            currentSolution.addAll(newSolution)
+            // 현재 해결책 갱신 (객체 복사 최소화)
+            copySolution(neighborBufferA, currentSolution)
             currentEnergy = newEnergy
             
             if (currentEnergy < bestEnergy) {
-                bestSolution = currentSolution.map { it.toMutableList() }
+                copySolution(currentSolution, bestSolution)
                 bestEnergy = currentEnergy
                 noImprovementCount = 0
             } else {
@@ -181,9 +255,11 @@ fun simulatedAnnealing(depot: Customer, initialSolution: List<List<Customer>>, c
             noImprovementCount++
         }
         
-        // 일정 횟수 개선이 없으면 온도를 높임 (재가열)
-        if (noImprovementCount > 1000) {
-            temperature *= 1.5
+        // 조기 종료 조건 - 일정 시간 이후 개선이 없으면 종료
+        if (noImprovementCount > 5000) {
+            // 너무 많이 재가열하는 대신, 일정 임계치 이상에서는 종료
+            if (temperature < 10.0) break
+            temperature *= 1.2 // 소폭만 재가열
             noImprovementCount = 0
         } else {
             temperature *= coolingRate
@@ -191,6 +267,16 @@ fun simulatedAnnealing(depot: Customer, initialSolution: List<List<Customer>>, c
     }
     
     return bestSolution
+}
+
+// 효율적인 솔루션 복사 (객체 생성 없이)
+fun copySolution(source: List<List<Customer>>, target: MutableList<MutableList<Customer>>) {
+    target.clear()
+    for (route in source) {
+        val newRoute = mutableListOf<Customer>()
+        newRoute.addAll(route)
+        target.add(newRoute)
+    }
 }
 
 // 지역 최적화 적용 (2-opt)
@@ -226,32 +312,34 @@ fun applyLocalOptimization(solution: MutableList<MutableList<Customer>>, depot: 
     }
 }
 
-// 이웃 해결책 생성 (개선)
-fun generateNeighbor(solution: MutableList<MutableList<Customer>>, capacity: Int): MutableList<MutableList<Customer>> {
-    val newSolution = solution.map { it.toMutableList() }.toMutableList()
+// 이웃 해결책 생성 (최적화 - 객체 생성 최소화)
+fun generateNeighbor(
+    solution: MutableList<MutableList<Customer>>, 
+    target: MutableList<MutableList<Customer>>,
+    capacity: Int
+): Boolean {
+    // 객체 재사용
+    copySolution(solution, target)
     
-    // 더 다양한 이웃 생성 전략
-    when (Random.nextInt(5)) {
-        0 -> swapCustomersWithinRoute(newSolution)
-        1 -> moveCustomerBetweenRoutes(newSolution, capacity)
-        2 -> reverseSubroute(newSolution)
-        3 -> relocateCustomer(newSolution) // 새로운 전략
-        4 -> swapCustomersBetweenRoutes(newSolution) // 새로운 전략
+    // 성공 여부를 반환하는 수정된 함수들 사용
+    return when (Random.nextInt(5)) {
+        0 -> swapCustomersWithinRoute(target)
+        1 -> moveCustomerBetweenRoutes(target, capacity)
+        2 -> reverseSubroute(target)
+        3 -> relocateCustomer(target)
+        else -> swapCustomersBetweenRoutes(target)
     }
-    
-    return newSolution
 }
 
-// 한 경로 내에서 두 고객 위치 교환
-fun swapCustomersWithinRoute(solution: MutableList<MutableList<Customer>>) {
-    if (solution.isEmpty()) return
+// 한 경로 내에서 두 고객 위치 교환 (성공 여부 반환)
+fun swapCustomersWithinRoute(solution: MutableList<MutableList<Customer>>): Boolean {
+    if (solution.isEmpty()) return false
     
     // 비어있지 않은 경로 선택
     val nonEmptyRoutes = solution.filter { it.size >= 2 }
-    if (nonEmptyRoutes.isEmpty()) return
+    if (nonEmptyRoutes.isEmpty()) return false
     
     val route = nonEmptyRoutes.random()
-    val routeIdx = solution.indexOf(route)
     
     val i = Random.nextInt(route.size)
     var j = Random.nextInt(route.size)
@@ -260,15 +348,16 @@ fun swapCustomersWithinRoute(solution: MutableList<MutableList<Customer>>) {
     val temp = route[i]
     route[i] = route[j]
     route[j] = temp
+    return true
 }
 
-// 서로 다른 경로 간 고객 이동 (개선)
-fun moveCustomerBetweenRoutes(solution: MutableList<MutableList<Customer>>, capacity: Int) {
-    if (solution.size < 2) return
+// 서로 다른 경로 간 고객 이동 (성공 여부 반환)
+fun moveCustomerBetweenRoutes(solution: MutableList<MutableList<Customer>>, capacity: Int): Boolean {
+    if (solution.size < 2) return false
     
     // 비어있지 않은 경로 선택
     val nonEmptyRoutes = solution.indices.filter { solution[it].isNotEmpty() }.toList()
-    if (nonEmptyRoutes.size < 2) return
+    if (nonEmptyRoutes.size < 2) return false
     
     val sourceRouteIdx = nonEmptyRoutes.random()
     val sourceRoute = solution[sourceRouteIdx]
@@ -284,25 +373,17 @@ fun moveCustomerBetweenRoutes(solution: MutableList<MutableList<Customer>>, capa
     val destRouteTotalDemand = destRoute.sumOf { it.demand }
     if (destRouteTotalDemand + customer.demand <= capacity) {
         sourceRoute.removeAt(customerIdx)
-        // 가장 좋은 위치 찾기
-        var bestPosition = 0
-        var minIncrease = Double.MAX_VALUE
         
-        for (pos in 0..destRoute.size) {
-            val before = if (pos > 0) destRoute[pos-1] else null
-            val after = if (pos < destRoute.size) destRoute[pos] else null
-            
-            val oldDistance = if (before != null && after != null) {
-                distance(before, after).toDouble()
-            } else 0.0
-            
-            val newDistance = (if (before != null) distance(before, customer).toDouble() else 0.0) +
-                              (if (after != null) distance(customer, after).toDouble() else 0.0)
-            
-            val increase = newDistance - oldDistance
-            if (increase < minIncrease) {
-                minIncrease = increase
-                bestPosition = pos
+        // 효율 개선: 이동 전에 최적의 위치 계산 빠르게 수행
+        var bestPosition = 0
+        if (destRoute.isNotEmpty()) {
+            var minIncrease = Double.MAX_VALUE
+            for (pos in 0..destRoute.size) {
+                val increase = calculateInsertionCost(destRoute, pos, customer)
+                if (increase < minIncrease) {
+                    minIncrease = increase
+                    bestPosition = pos
+                }
             }
         }
         
@@ -312,19 +393,35 @@ fun moveCustomerBetweenRoutes(solution: MutableList<MutableList<Customer>>, capa
         if (sourceRoute.isEmpty()) {
             solution.removeAt(sourceRouteIdx)
         }
+        return true
     }
+    return false
 }
 
-// 서브루트 역전 (개선)
-fun reverseSubroute(solution: MutableList<MutableList<Customer>>) {
-    if (solution.isEmpty()) return
+// 삽입 비용 계산 최적화 함수
+fun calculateInsertionCost(route: List<Customer>, pos: Int, customer: Customer): Double {
+    val before = if (pos > 0) route[pos-1] else null
+    val after = if (pos < route.size) route[pos] else null
+    
+    val oldDistance = if (before != null && after != null) {
+        distance(before, after).toDouble()
+    } else 0.0
+    
+    val newDistance = (if (before != null) distance(before, customer).toDouble() else 0.0) +
+                      (if (after != null) distance(customer, after).toDouble() else 0.0)
+    
+    return newDistance - oldDistance
+}
+
+// 서브루트 역전 (성공 여부 반환)
+fun reverseSubroute(solution: MutableList<MutableList<Customer>>): Boolean {
+    if (solution.isEmpty()) return false
     
     // 역전 가능한 경로 필터링
     val reversibleRoutes = solution.filter { it.size >= 3 }
-    if (reversibleRoutes.isEmpty()) return
+    if (reversibleRoutes.isEmpty()) return false
     
     val route = reversibleRoutes.random()
-    val routeIdx = solution.indexOf(route)
     
     val start = Random.nextInt(route.size - 2)
     val end = start + 1 + Random.nextInt(route.size - start - 1)
@@ -338,18 +435,17 @@ fun reverseSubroute(solution: MutableList<MutableList<Customer>>) {
         i++
         j--
     }
+    return true
 }
 
-// 새로운 이웃 생성 전략: 고객 재배치
-fun relocateCustomer(solution: MutableList<MutableList<Customer>>) {
-    if (solution.isEmpty()) return
+// 고객 재배치 (성공 여부 반환)
+fun relocateCustomer(solution: MutableList<MutableList<Customer>>): Boolean {
+    if (solution.isEmpty()) return false
     
-    // 비어있지 않은 경로 선택
     val nonEmptyRoutes = solution.filter { it.size >= 2 }
-    if (nonEmptyRoutes.isEmpty()) return
+    if (nonEmptyRoutes.isEmpty()) return false
     
     val route = nonEmptyRoutes.random()
-    val routeIdx = solution.indexOf(route)
     
     val fromPos = Random.nextInt(route.size)
     var toPos = Random.nextInt(route.size)
@@ -358,16 +454,17 @@ fun relocateCustomer(solution: MutableList<MutableList<Customer>>) {
         val customer = route.removeAt(fromPos)
         if (toPos > fromPos) toPos--
         route.add(toPos, customer)
+        return true
     }
+    return false
 }
 
-// 새로운 이웃 생성 전략: 서로 다른 경로 간 고객 교환
-fun swapCustomersBetweenRoutes(solution: MutableList<MutableList<Customer>>) {
-    if (solution.size < 2) return
+// 서로 다른 경로 간 고객 교환 (성공 여부 반환)
+fun swapCustomersBetweenRoutes(solution: MutableList<MutableList<Customer>>): Boolean {
+    if (solution.size < 2) return false
     
-    // 비어있지 않은 경로 선택
     val nonEmptyRoutes = solution.indices.filter { solution[it].isNotEmpty() }.toList()
-    if (nonEmptyRoutes.size < 2) return
+    if (nonEmptyRoutes.size < 2) return false
     
     val routeIdx1 = nonEmptyRoutes.random()
     var routeIdx2 = nonEmptyRoutes.random()
@@ -384,12 +481,16 @@ fun swapCustomersBetweenRoutes(solution: MutableList<MutableList<Customer>>) {
     val temp = route1[custIdx1]
     route1[custIdx1] = route2[custIdx2]
     route2[custIdx2] = temp
+    return true
 }
 
-// 해결책 수락 확률 계산 (보정)
+// 해결책 수락 확률 계산 (보정) - 빠른 결정을 위해 계산 간소화
 fun acceptanceProbability(currentEnergy: Double, newEnergy: Double, temperature: Double): Double {
     if (newEnergy < currentEnergy) return 1.0
-    return exp(min(-1.0, (currentEnergy - newEnergy) / temperature))
+    // 성능 최적화: exp 함수 호출 줄이기 위한 빠른 판별
+    val delta = currentEnergy - newEnergy
+    if (delta < -20 * temperature) return 0.0 // 거의 0에 가까운 확률일 경우 바로 0 반환
+    return exp((currentEnergy - newEnergy) / temperature)
 }
 
 // 해결책을 형식화된 문자열로 변환
@@ -398,3 +499,4 @@ fun formatSolution(solution: List<List<Customer>>): String {
         route.joinToString(" ") { it.index.toString() }
     }
 }
+
