@@ -151,7 +151,6 @@ fun simulatedAnnealing(depot: Customer, initialSolution: List<List<Customer>>, c
     // 객체 생성 최소화를 위한 공유 버퍼 사용
     val currentSolution = initialSolution.map { it.toMutableList() }.toMutableList()
     val bestSolution = initialSolution.map { it.toMutableList() }.toMutableList()
-    initialSolution.map { it.toMutableList() }.toMutableList()
     
     var currentEnergy = calculateTotalDistance(depot, currentSolution)
     var bestEnergy = currentEnergy
@@ -166,7 +165,6 @@ fun simulatedAnnealing(depot: Customer, initialSolution: List<List<Customer>>, c
     var iterations = 0
     var noImprovementCount = 0
     val neighborBufferA = currentSolution.map { it.toMutableList() }.toMutableList()
-    currentSolution.map { it.toMutableList() }.toMutableList()
     
     // 현재 정책을 효과적인 방향으로 강제 조정
     var swapWithinRouteWeight = 1
@@ -480,4 +478,3 @@ fun formatSolution(solution: List<List<Customer>>): String {
         route.joinToString(" ") { it.index.toString() }
     }
 }
-
