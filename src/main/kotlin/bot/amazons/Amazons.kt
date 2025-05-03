@@ -9,21 +9,28 @@ data class Position(val row: Int, val col: Int) {
     }
     
     companion object {
-        val directions = listOf(
-            -1 to -1, -1 to 0, -1 to 1, 
-            0 to -1, 0 to 1, 
-            1 to -1, 1 to 0, 1 to 1
-        )
-        
-        // 방향 배열을 직접 사용하여 객체 생성 줄이기
+        // 방향 정의 - 불변 배열로 변경하여 효율성 향상
         private val directionsArray = arrayOf(
             -1 to -1, -1 to 0, -1 to 1, 
             0 to -1, 0 to 1, 
             1 to -1, 1 to 0, 1 to 1
         )
         
+        // 이전 버전과의 호환성을 위해 directions 리스트 유지
+        val directions = directionsArray.toList()
+        
+        // 방향을 직접 배열로 접근하는 함수 - 객체 생성 없이 효율적으로 방향 참조
+        @JvmStatic
         fun getDirection(index: Int): Pair<Int, Int> = directionsArray[index]
+        
         val directionsCount = directionsArray.size
+        
+        // 방향의 행과 열 변화량을 개별적으로 가져오는 함수 (객체 생성 방지)
+        @JvmStatic
+        fun getDirRow(index: Int): Int = directionsArray[index].first
+        
+        @JvmStatic
+        fun getDirCol(index: Int): Int = directionsArray[index].second
     }
 }
 
@@ -33,9 +40,21 @@ data class Move(val from: Position, val to: Position, val arrow: Position) {
     }
 }
 
-// 성능을 위한 간단한 이동 표현 클래스
+// 성능을 위한 간단한 이동 표현 클래스 - 객체 생성 최소화
 class MoveInt(val fromRow: Int, val fromCol: Int, val toRow: Int, val toCol: Int, val arrowRow: Int, val arrowCol: Int) {
     fun toMove(): Move = Move(Position(fromRow, fromCol), Position(toRow, toCol), Position(arrowRow, arrowCol))
+    
+    // 객체 재사용을 통한 성능 최적화
+    fun toNotation(boardSize: Int): String {
+        val fromCol = 'a' + fromCol
+        val fromRow = boardSize - fromRow
+        val toCol = 'a' + toCol
+        val toRow = boardSize - toRow
+        val arrowCol = 'a' + arrowCol
+        val arrowRow = boardSize - arrowRow
+        
+        return "$fromCol$fromRow$toCol$toRow$arrowCol$arrowRow"
+    }
 }
 
 class GameBoard(val size: Int) {
@@ -44,18 +63,39 @@ class GameBoard(val size: Int) {
     val opponentPieces = mutableListOf<Position>()
     var myColor: Char = 'w'
     
-    // 캐싱을 위한 변수들
-    private val movesCache = mutableMapOf<String, List<Position>>()
-    private val mobilityCache = mutableMapOf<String, Int>()
+    // 캐싱을 위한 변수들 - 효율성 향상
+    private val movesCache = mutableMapOf<Int, List<Position>>()
+    private val mobilityCache = mutableMapOf<Int, Int>()
     private val moveIntList = mutableListOf<MoveInt>()
     
-    // 보드 상태를 해시로 표현하기 위한 함수
-    private fun getBoardHash(): String {
-        val sb = StringBuilder(size * size)
-        for (row in board) {
-            sb.append(row)
+    // 최근 보드 해시값 캐싱
+    private var currentBoardHash: Int = 0
+    private var boardHashValid = false
+    
+    // 보드 상태를 해시로 표현하기 위한 빠른 함수 (조브리스트-피어슨 해싱)
+    private fun getBoardHash(): Int {
+        if (boardHashValid) return currentBoardHash
+        
+        var h = 0
+        var index = 0
+        
+        for (row in 0 until size) {
+            for (col in 0 until size) {
+                val c = board[row][col]
+                // 피어슨 해싱으로 충돌 가능성 감소
+                h = ((h * 31) + c.code) and 0x7FFFFFFF
+                index++
+            }
         }
-        return sb.toString()
+        
+        currentBoardHash = h
+        boardHashValid = true
+        return h
+    }
+    
+    // 보드 위치를 해시 키로 변환 - 캐시 효율 향상
+    private fun positionToHashKey(row: Int, col: Int, dirIndex: Int): Int {
+        return ((row * 31 + col) * 31 + dirIndex) * 31 + getBoardHash()
     }
     
     fun update(color: String, boardLines: List<String>) {
@@ -64,6 +104,7 @@ class GameBoard(val size: Int) {
         opponentPieces.clear()
         movesCache.clear()
         mobilityCache.clear()
+        boardHashValid = false
         
         for (row in 0 until size) {
             for (col in 0 until size) {
@@ -77,56 +118,36 @@ class GameBoard(val size: Int) {
         }
     }
     
-    fun isValidPosition(pos: Position): Boolean {
-        return pos.row in 0 until size && pos.col in 0 until size && board[pos.row][pos.col] == '.'
+    // 빠른 유효성 검사 (인라인 처리를 위해 변수 분리)
+    @JvmName("isValidPosition")
+    fun isValidPosition(row: Int, col: Int): Boolean {
+        return row in 0 until size && col in 0 until size && board[row][col] == '.'
     }
     
-    // 한 방향으로 움직일 수 있는 모든 위치 찾기 (캐싱 적용)
-    fun getMovesInDirection(from: Position, dir: Pair<Int, Int>): List<Position> {
-        val cacheKey = "${from.row},${from.col},${dir.first},${dir.second},${getBoardHash()}"
+    fun isValidPosition(pos: Position): Boolean {
+        return isValidPosition(pos.row, pos.col)
+    }
+    
+    // 한 방향으로 움직일 수 있는 모든 위치 찾기 (캐싱 최적화)
+    fun getMovesInDirection(from: Position, dirIndex: Int): List<Position> {
+        val cacheKey = positionToHashKey(from.row, from.col, dirIndex)
         
         return movesCache.getOrPut(cacheKey) {
             val result = mutableListOf<Position>()
-            var row = from.row + dir.first
-            var col = from.col + dir.second
+            val dirRow = Position.getDirRow(dirIndex)
+            val dirCol = Position.getDirCol(dirIndex)
             
-            while (row in 0 until size && col in 0 until size && board[row][col] == '.') {
+            var row = from.row + dirRow
+            var col = from.col + dirCol
+            
+            while (isValidPosition(row, col)) {
                 result.add(Position(row, col))
-                row += dir.first
-                col += dir.second
+                row += dirRow
+                col += dirCol
             }
             
             result
         }
-    }
-    
-    // 특정 위치에서 다른 위치로 직선/대각선 이동이 가능한지 확인
-    fun canMove(from: Position, to: Position): Boolean {
-        if (to.row !in 0 until size || to.col !in 0 until size || board[to.row][to.col] != '.') {
-            return false
-        }
-        
-        val rowDiff = to.row - from.row
-        val colDiff = to.col - from.col
-        
-        // 수직, 수평, 대각선 이동만 가능
-        if (rowDiff == 0 || colDiff == 0 || abs(rowDiff) == abs(colDiff)) {
-            val rowDir = if (rowDiff == 0) 0 else rowDiff / abs(rowDiff)
-            val colDir = if (colDiff == 0) 0 else colDiff / abs(colDiff)
-            
-            var r = from.row + rowDir
-            var c = from.col + colDir
-            
-            while (r != to.row || c != to.col) {
-                if (board[r][c] != '.') return false
-                r += rowDir
-                c += colDir
-            }
-            
-            return true
-        }
-        
-        return false
     }
     
     // 특정 말에 대해 가능한 모든 이동 생성 (최적화)
@@ -134,36 +155,40 @@ class GameBoard(val size: Int) {
         moveIntList.clear()
         
         for (dirIndex in 0 until Position.directionsCount) {
-            val dir = Position.getDirection(dirIndex)
-            var r = piece.row + dir.first
-            var c = piece.col + dir.second
+            val dirRow = Position.getDirRow(dirIndex)
+            val dirCol = Position.getDirCol(dirIndex)
+            var r = piece.row + dirRow
+            var c = piece.col + dirCol
             
-            // 말 이동 가능한 모든 위치 탐색
-            while (r in 0 until size && c in 0 until size && board[r][c] == '.') {
+            // 말 이동 가능한 모든 위치 탐색 (객체 생성 최소화)
+            while (isValidPosition(r, c)) {
                 // 임시로 말 이동
                 val originalPiece = board[piece.row][piece.col]
                 board[piece.row][piece.col] = '.'
                 board[r][c] = originalPiece
+                boardHashValid = false  // 보드 해시 무효화
                 
-                // 화살 배치 가능한 위치 찾기
+                // 화살 배치 가능한 위치 찾기 (객체 생성 최소화)
                 for (arrowDirIndex in 0 until Position.directionsCount) {
-                    val arrowDir = Position.getDirection(arrowDirIndex)
-                    var ar = r + arrowDir.first
-                    var ac = c + arrowDir.second
+                    val arrowDirRow = Position.getDirRow(arrowDirIndex)
+                    val arrowDirCol = Position.getDirCol(arrowDirIndex)
+                    var ar = r + arrowDirRow
+                    var ac = c + arrowDirCol
                     
-                    while (ar in 0 until size && ac in 0 until size && board[ar][ac] == '.') {
+                    while (isValidPosition(ar, ac)) {
                         moveIntList.add(MoveInt(piece.row, piece.col, r, c, ar, ac))
-                        ar += arrowDir.first
-                        ac += arrowDir.second
+                        ar += arrowDirRow
+                        ac += arrowDirCol
                     }
                 }
                 
                 // 원래대로 복구
                 board[r][c] = '.'
                 board[piece.row][piece.col] = originalPiece
+                boardHashValid = false  // 보드 해시 무효화
                 
-                r += dir.first
-                c += dir.second
+                r += dirRow
+                c += dirCol
             }
         }
         
@@ -172,22 +197,36 @@ class GameBoard(val size: Int) {
     
     // 가능한 모든 이동 생성 (최적화)
     fun generateAllMoves(): List<Move> {
-        val allMoves = mutableListOf<Move>()
+        // 최대 이동 수에 도달하면 중지 (성능 최적화)
+        val maxMovesToGenerate = if (myPieces.size < 3) 200 else 100
+        val allMoves = ArrayList<Move>(maxMovesToGenerate)
         
-        // 첫 턴인 경우 중앙에 가까운 말부터 고려 (일반적으로 좋은 전략)
+        // 중앙에 가까운 말부터 고려 (일반적으로 좋은 전략)
         val centerRow = size / 2
         val centerCol = size / 2
-        val sortedPieces = myPieces.sortedBy { 
+        
+        // 객체 생성을 최소화하기 위해 정렬 대신 가장 중앙에 가까운 말 먼저 처리
+        val distanceMap = myPieces.associateWith { 
             abs(it.row - centerRow) + abs(it.col - centerCol) 
         }
         
-        // 일정 개수 이상의 이동이 발견되면 조기 종료 (성능 최적화)
-        val maxMovesToGenerate = 100
+        val sortedPieces = myPieces.sortedBy { distanceMap[it] }
         
         for (piece in sortedPieces) {
             val moves = generateMovesForPiece(piece)
-            moves.take(maxMovesToGenerate - allMoves.size).forEach { 
-                allMoves.add(it.toMove())
+            
+            // 중앙에 가까운 목적지를 우선적으로 고려
+            val sortedMoves = if (myPieces.size <= 3) {
+                // 게임 후반부는 이동성이 더 중요하므로 정렬 생략
+                moves
+            } else {
+                moves.sortedBy { 
+                    abs(it.toRow - centerRow) + abs(it.toCol - centerCol) 
+                }
+            }
+            
+            for (move in sortedMoves) {
+                allMoves.add(move.toMove())
                 if (allMoves.size >= maxMovesToGenerate) return allMoves
             }
         }
@@ -206,8 +245,8 @@ class GameBoard(val size: Int) {
         board[to.row][to.col] = piece
         board[arrow.row][arrow.col] = '-'
         
-        // 캐시 무효화
-        movesCache.clear()
+        // 보드 상태 변경으로 캐시 및 해시 무효화
+        boardHashValid = false
         
         // 내 말 위치 업데이트
         val pieceIndex = myPieces.indexOfFirst { it.row == from.row && it.col == from.col }
@@ -226,8 +265,8 @@ class GameBoard(val size: Int) {
         board[to.row][to.col] = '.'
         board[arrow.row][arrow.col] = '.'
         
-        // 캐시 무효화
-        movesCache.clear()
+        // 보드 상태 변경으로 캐시 및 해시 무효화
+        boardHashValid = false
         
         // 내 말 위치 복원
         val pieceIndex = myPieces.indexOfFirst { it.row == to.row && it.col == to.col }
@@ -236,22 +275,25 @@ class GameBoard(val size: Int) {
         }
     }
     
-    // 빠른 이동성 계산 (캐싱 적용)
-    private fun calculateMobilityForPiece(piece: Position): Int {
-        val key = "${piece.row},${piece.col},${getBoardHash()}"
+    // 빠른 이동성 계산 - 캐싱과 방향별 최적화
+    private fun calculateMobilityForPiece(row: Int, col: Int): Int {
+        val key = ((row * 31 + col) * 31) + getBoardHash()
         
         return mobilityCache.getOrPut(key) {
             var mobility = 0
             
+            // 8방향 이동성 계산 (객체 생성 없이)
             for (dirIndex in 0 until Position.directionsCount) {
-                val dir = Position.getDirection(dirIndex)
-                var r = piece.row + dir.first
-                var c = piece.col + dir.second
+                val dirRow = Position.getDirRow(dirIndex)
+                val dirCol = Position.getDirCol(dirIndex)
                 
-                while (r in 0 until size && c in 0 until size && board[r][c] == '.') {
+                var r = row + dirRow
+                var c = col + dirCol
+                
+                while (isValidPosition(r, c)) {
                     mobility++
-                    r += dir.first
-                    c += dir.second
+                    r += dirRow
+                    c += dirCol
                 }
             }
             
@@ -259,9 +301,8 @@ class GameBoard(val size: Int) {
         }
     }
     
-    // 개선된 평가 함수: 성능 최적화
+    // 평가 함수 최적화: 이동성과 영역 지배력 통합
     fun evaluateMove(move: Move): Int {
-        // 말 이동 시뮬레이션
         val from = move.from
         val to = move.to
         val arrow = move.arrow
@@ -271,32 +312,31 @@ class GameBoard(val size: Int) {
         // 이동 시뮬레이션
         makeMove(move)
         
+        // 초기화
+        movesCache.clear()
+        mobilityCache.clear()
+        
         // 이동성 평가 (최적화)
         var myMobility = 0
         var opponentMobility = 0
         
         // 내 이동성 빠르게 계산
         for (myPiece in myPieces) {
-            myMobility += calculateMobilityForPiece(myPiece)
+            myMobility += calculateMobilityForPiece(myPiece.row, myPiece.col)
         }
         
         // 상대방 이동성 빠르게 계산
         for (opponentPiece in opponentPieces) {
-            opponentMobility += calculateMobilityForPiece(opponentPiece)
+            opponentMobility += calculateMobilityForPiece(opponentPiece.row, opponentPiece.col)
         }
         
-        // 초단순화된 평가 - 게임 종반에는 이동성이 가장 중요
-        val score = myMobility - opponentMobility
+        // 이동성 차이에 가중치 부여 (핵심 전략 요소)
+        val mobilityScore = (myMobility - opponentMobility) * 3
         
         // 원래대로 복구
         undoMove(move, originalPiece)
         
-        return score
-    }
-    
-    // 맨해튼 거리 계산 (두 위치 사이의 가로 및 세로 거리의 합)
-    private fun manhattanDistance(pos1: Position, pos2: Position): Int {
-        return abs(pos1.row - pos2.row) + abs(pos1.col - pos2.col)
+        return mobilityScore
     }
     
     // 최적화된 알파-베타 탐색
@@ -312,60 +352,57 @@ class GameBoard(val size: Int) {
             val centerCol = size / 2
             return possibleMoves.minByOrNull { 
                 val to = it.to
-                manhattanDistance(to, Position(centerRow, centerCol))
+                abs(to.row - centerRow) + abs(to.col - centerCol)
             }
         }
         
         // 시간에 따른 적응형 탐색 깊이
-        val remainingTime = timeLimit - (System.currentTimeMillis() - startTime)
-        val movesPerMillisecond = if (remainingTime > 0) 10.0 / remainingTime else 0.01
-        val estimatedMaxDepth = when {
-            movesPerMillisecond < 0.001 -> 2
-            movesPerMillisecond < 0.01 -> 1
-            else -> 1
+        val depth = if (myPieces.size <= 3 || opponentPieces.size <= 3) {
+            // 게임 후반부는 더 깊게 탐색
+            2
+        } else if (timeLimit > 500) {
+            // 첫 턴은 더 깊게 탐색
+            2
+        } else {
+            1
         }
+        
+        // 시간 관리 개선 - 전체 시간의 80%만 사용
+        val safeTimeLimit = (timeLimit * 0.8).toLong()
         
         var bestMove: Move? = null
         var bestScore = Int.MIN_VALUE
         
-        // 이터레이티브 디프닝 - 시간이 허락하는대로 깊이 증가
-        for (depth in 1..estimatedMaxDepth) {
-            var currentBestMove: Move? = null
-            var currentBestScore = Int.MIN_VALUE
-            
-            for (move in possibleMoves) {
-                if (System.currentTimeMillis() - startTime > timeLimit * 0.8) {
-                    // 시간의 80%를 초과하면 현재 최선의 이동 반환
-                    return bestMove ?: possibleMoves.first()
-                }
-                
-                val originalPiece = board[move.from.row][move.from.col]
-                makeMove(move)
-                
-                val score = -negamax(depth - 1, Int.MIN_VALUE, Int.MAX_VALUE, startTime, timeLimit)
-                
-                undoMove(move, originalPiece)
-                
-                if (score > currentBestScore) {
-                    currentBestScore = score
-                    currentBestMove = move
-                }
+        for (move in possibleMoves) {
+            if (System.currentTimeMillis() - startTime > safeTimeLimit) {
+                break
             }
             
-            // 이 깊이에서의 최선 이동 저장
-            if (currentBestMove != null) {
-                bestMove = currentBestMove
-                bestScore = currentBestScore
+            val originalPiece = board[move.from.row][move.from.col]
+            makeMove(move)
+            
+            // 효율적인 평가 호출
+            val score = if (depth <= 1) {
+                evaluateSimplePosition()
+            } else {
+                -negamax(depth - 1, Int.MIN_VALUE, Int.MAX_VALUE, startTime, safeTimeLimit)
+            }
+            
+            undoMove(move, originalPiece)
+            
+            if (score > bestScore) {
+                bestScore = score
+                bestMove = move
             }
         }
         
-        return bestMove ?: possibleMoves.first()
+        return bestMove ?: possibleMoves.firstOrNull()
     }
     
     // 시간 제약을 고려한 Negamax
     private fun negamax(depth: Int, alpha: Int, beta: Int, startTime: Long, timeLimit: Long): Int {
         // 시간 초과 확인
-        if (System.currentTimeMillis() - startTime > timeLimit * 0.8) {
+        if (System.currentTimeMillis() - startTime > timeLimit) {
             return 0  // 중립 점수 반환
         }
         
@@ -386,7 +423,7 @@ class GameBoard(val size: Int) {
             undoMove(move, originalPiece)
             
             // 시간 초과 확인
-            if (System.currentTimeMillis() - startTime > timeLimit * 0.8) {
+            if (System.currentTimeMillis() - startTime > timeLimit) {
                 return bestScore
             }
             
@@ -403,38 +440,39 @@ class GameBoard(val size: Int) {
         var myMobility = 0
         var opponentMobility = 0
         
-        // 샘플링된 이동성 계산 (모든 방향을 계산하지 않고 일부만 확인)
+        // 내 이동성 계산 - 객체 생성 최소화
         for (myPiece in myPieces) {
-            // 4방향만 확인 (성능 최적화)
-            for (dirIndex in 0 until 4) {
-                val dir = Position.getDirection(dirIndex)
-                var r = myPiece.row + dir.first
-                var c = myPiece.col + dir.second
+            for (dirIndex in 0 until Position.directionsCount) {
+                val dirRow = Position.getDirRow(dirIndex)
+                val dirCol = Position.getDirCol(dirIndex)
+                var r = myPiece.row + dirRow
+                var c = myPiece.col + dirCol
                 
-                while (r in 0 until size && c in 0 until size && board[r][c] == '.') {
+                while (isValidPosition(r, c)) {
                     myMobility++
-                    r += dir.first
-                    c += dir.second
+                    r += dirRow
+                    c += dirCol
                 }
             }
         }
         
+        // 상대방 이동성 계산 - 객체 생성 최소화
         for (opponentPiece in opponentPieces) {
-            // 4방향만 확인 (성능 최적화)
-            for (dirIndex in 0 until 4) {
-                val dir = Position.getDirection(dirIndex)
-                var r = opponentPiece.row + dir.first
-                var c = opponentPiece.col + dir.second
+            for (dirIndex in 0 until Position.directionsCount) {
+                val dirRow = Position.getDirRow(dirIndex)
+                val dirCol = Position.getDirCol(dirIndex)
+                var r = opponentPiece.row + dirRow
+                var c = opponentPiece.col + dirCol
                 
-                while (r in 0 until size && c in 0 until size && board[r][c] == '.') {
+                while (isValidPosition(r, c)) {
                     opponentMobility++
-                    r += dir.first
-                    c += dir.second
+                    r += dirRow
+                    c += dirCol
                 }
             }
         }
         
-        // 이동성 차이만 반환 (가장 중요한 요소)
+        // 이동성 차이 반환 (가장 중요한 요소)
         return myMobility - opponentMobility
     }
 }
