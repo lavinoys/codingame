@@ -45,13 +45,15 @@ fun main() {
 // 거리 캐시를 위한 맵 - 더 빠른 접근을 위해 Array 사용
 private lateinit var distanceCache: Array<Array<Int>>
 private var customerCount = 0
+private lateinit var customerIndexToArrayIndex: Map<Int, Int> // 추가: 인덱스 매핑
 
-// 거리 캐시 초기화 - 배열 기반으로 변경
+// 거리 캐시 초기화 함수 수정
 fun initDistanceCache(customers: List<Customer>) {
     customerCount = customers.size
     distanceCache = Array(customerCount) { Array(customerCount) { 0 } }
     
-    val indexMap = customers.associateWith { customers.indexOf(it) }
+    // Customer.index와 배열 인덱스 간의 매핑 생성
+    customerIndexToArrayIndex = customers.associate { it.index to customers.indexOf(it) }
     
     for (i in customers.indices) {
         for (j in i + 1 until customers.size) {
@@ -59,20 +61,18 @@ fun initDistanceCache(customers: List<Customer>) {
             val b = customers[j]
             val dist = sqrt((a.x - b.x).toDouble().pow(2) + (a.y - b.y).toDouble().pow(2)).roundToInt()
             
-            val idxA = indexMap[a] ?: i
-            val idxB = indexMap[b] ?: j
-            
-            distanceCache[idxA][idxB] = dist
-            distanceCache[idxB][idxA] = dist
+            distanceCache[i][j] = dist
+            distanceCache[j][i] = dist
         }
     }
 }
 
-// 두 지점 사이의 거리 계산 (배열 기반 캐시 사용)
+// 두 지점 사이의 거리 계산 함수 수정
 fun distance(a: Customer, b: Customer): Int {
-    val idxA = a.index
-    val idxB = b.index
-    return if (idxA < customerCount && idxB < customerCount) {
+    val idxA = customerIndexToArrayIndex[a.index]
+    val idxB = customerIndexToArrayIndex[b.index]
+    
+    return if (idxA != null && idxB != null) {
         distanceCache[idxA][idxB]
     } else {
         sqrt((a.x - b.x).toDouble().pow(2) + (a.y - b.y).toDouble().pow(2)).roundToInt()
