@@ -151,7 +151,7 @@ fun simulatedAnnealing(depot: Customer, initialSolution: List<List<Customer>>, c
     // 객체 생성 최소화를 위한 공유 버퍼 사용
     val currentSolution = initialSolution.map { it.toMutableList() }.toMutableList()
     val bestSolution = initialSolution.map { it.toMutableList() }.toMutableList()
-    val tempSolution = initialSolution.map { it.toMutableList() }.toMutableList()
+    initialSolution.map { it.toMutableList() }.toMutableList()
     
     var currentEnergy = calculateTotalDistance(depot, currentSolution)
     var bestEnergy = currentEnergy
@@ -166,7 +166,7 @@ fun simulatedAnnealing(depot: Customer, initialSolution: List<List<Customer>>, c
     var iterations = 0
     var noImprovementCount = 0
     val neighborBufferA = currentSolution.map { it.toMutableList() }.toMutableList()
-    val neighborBufferB = currentSolution.map { it.toMutableList() }.toMutableList()
+    currentSolution.map { it.toMutableList() }.toMutableList()
     
     // 현재 정책을 효과적인 방향으로 강제 조정
     var swapWithinRouteWeight = 1
@@ -309,25 +309,6 @@ fun applyLocalOptimization(solution: MutableList<MutableList<Customer>>, depot: 
                 }
             }
         }
-    }
-}
-
-// 이웃 해결책 생성 (최적화 - 객체 생성 최소화)
-fun generateNeighbor(
-    solution: MutableList<MutableList<Customer>>, 
-    target: MutableList<MutableList<Customer>>,
-    capacity: Int
-): Boolean {
-    // 객체 재사용
-    copySolution(solution, target)
-    
-    // 성공 여부를 반환하는 수정된 함수들 사용
-    return when (Random.nextInt(5)) {
-        0 -> swapCustomersWithinRoute(target)
-        1 -> moveCustomerBetweenRoutes(target, capacity)
-        2 -> reverseSubroute(target)
-        3 -> relocateCustomer(target)
-        else -> swapCustomersBetweenRoutes(target)
     }
 }
 
