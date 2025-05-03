@@ -1,6 +1,5 @@
 import java.util.*
 import kotlin.math.abs
-import kotlin.random.Random
 
 data class Position(val row: Int, val col: Int) {
     fun toNotation(boardSize: Int): String {
