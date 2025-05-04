@@ -10,6 +10,14 @@
 #define MAX_ROUTES 20
 #define MAX_SAVINGS (MAX_CUSTOMERS * MAX_CUSTOMERS)
 
+// k-d 트리 구조체 정의
+typedef struct KDNode {
+    int index;             // 고객 인덱스
+    int point[2];          // 2D 좌표 (x, y)
+    struct KDNode* left;   // 왼쪽 자식
+    struct KDNode* right;  // 오른쪽 자식
+} KDNode;
+
 typedef struct {
     int index;
     int x;
@@ -31,11 +39,137 @@ typedef struct {
     int saving_value;
 } Saving;
 
+// k-d 트리를 위한 거리 제곱 계산
+static inline int point_distance_squared(int* a, int* b) {
+    int dx = a[0] - b[0];
+    int dy = a[1] - b[1];
+    return dx * dx + dy * dy;
+}
+
 // 두 지점 사이의 거리 제곱 계산 (sqrt 제거로 성능 향상)
 static inline int distance_squared(const Customer* a, const Customer* b) {
     int dx = a->x - b->x;
     int dy = a->y - b->y;
     return dx * dx + dy * dy;
+}
+
+// k-d 트리 노드 생성
+static KDNode* create_kdnode(int index, int x, int y) {
+    KDNode* node = (KDNode*)malloc(sizeof(KDNode));
+    node->index = index;
+    node->point[0] = x;
+    node->point[1] = y;
+    node->left = NULL;
+    node->right = NULL;
+    return node;
+}
+
+// k-d 트리에서 x축 또는 y축 기준으로 정렬하기 위한 비교 함수
+static int compare_x(const void* a, const void* b) {
+    Customer* ca = (Customer*)a;
+    Customer* cb = (Customer*)b;
+    return ca->x - cb->x;
+}
+
+static int compare_y(const void* a, const void* b) {
+    Customer* ca = (Customer*)a;
+    Customer* cb = (Customer*)b;
+    return ca->y - cb->y;
+}
+
+// Customer 배열에서 k-d 트리 구축 (재귀적 구현)
+static KDNode* build_kdtree(Customer* customers, int start, int end, int depth) {
+    if (start > end) return NULL;
+    
+    // 현재 차원에 따라 정렬 (depth % 2 == 0이면 x축, 아니면 y축)
+    int axis = depth % 2;
+    if (axis == 0) {
+        qsort(customers + start, end - start + 1, sizeof(Customer), compare_x);
+    } else {
+        qsort(customers + start, end - start + 1, sizeof(Customer), compare_y);
+    }
+    
+    // 중앙값을 기준으로 분할
+    int median = start + (end - start) / 2;
+    KDNode* node = create_kdnode(customers[median].index, customers[median].x, customers[median].y);
+    
+    // 좌우 서브트리 재귀적으로 구축
+    node->left = build_kdtree(customers, start, median - 1, depth + 1);
+    node->right = build_kdtree(customers, median + 1, end, depth + 1);
+    
+    return node;
+}
+
+// 최근접 이웃 검색을 위한 전역 변수
+static int best_index;
+static int best_dist;
+
+// k-d 트리에서 최근접 이웃 검색
+static void nearest_neighbor_search(KDNode* root, int target_point[2], int depth) {
+    if (root == NULL) return;
+    
+    // 현재 노드와의 거리 계산
+    int dist = point_distance_squared(root->point, target_point);
+    
+    // 더 가까운 점을 찾았으면 업데이트
+    if (dist < best_dist && root->index != 0) { // 0번(depot)이 아닌 경우에만
+        best_dist = dist;
+        best_index = root->index;
+    }
+    
+    // 현재 축
+    int axis = depth % 2;
+    int diff = target_point[axis] - root->point[axis];
+    
+    // 먼저 가능성이 높은 서브트리 탐색
+    KDNode* near_subtree = (diff <= 0) ? root->left : root->right;
+    KDNode* far_subtree = (diff <= 0) ? root->right : root->left;
+    
+    nearest_neighbor_search(near_subtree, target_point, depth + 1);
+    
+    // 다른 서브트리에 더 가까운 점이 있을 수 있는 경우 탐색
+    if (diff * diff < best_dist) {
+        nearest_neighbor_search(far_subtree, target_point, depth + 1);
+    }
+}
+
+// k-d 트리 메모리 해제
+static void free_kdtree(KDNode* root) {
+    if (root == NULL) return;
+    free_kdtree(root->left);
+    free_kdtree(root->right);
+    free(root);
+}
+
+// 주어진 고객 위치에서 가장 가까운 미방문 고객 찾기
+static int find_nearest_unvisited(KDNode* root, Customer* customers, int current_idx, bool* visited) {
+    int target_point[2] = {customers[current_idx].x, customers[current_idx].y};
+    best_index = -1;
+    best_dist = INT_MAX;
+    
+    nearest_neighbor_search(root, target_point, 0);
+    
+    // 방문 여부 확인하고, 가장 가까운 미방문 고객 찾기
+    if (best_index >= 0 && !visited[best_index]) {
+        return best_index;
+    }
+    
+    // k-d 트리로 찾은 가장 가까운 고객이 이미 방문했다면, 
+    // 모든 미방문 고객 중에서 선형 탐색으로 가장 가까운 고객 찾기
+    int nearest_idx = -1;
+    int min_dist = INT_MAX;
+    
+    for (int i = 1; i < MAX_CUSTOMERS; i++) {
+        if (!visited[i] && customers[i].index == i) { // 유효한 고객인지 확인
+            int dist = distance_squared(&customers[current_idx], &customers[i]);
+            if (dist < min_dist) {
+                min_dist = dist;
+                nearest_idx = i;
+            }
+        }
+    }
+    
+    return nearest_idx;
 }
 
 // 경로 내의 두 고객 위치를 교환하여 개선 시도 (개선된 2-opt)
@@ -222,6 +356,7 @@ int main()
     
     // 고객 정보 저장
     Customer customers[MAX_CUSTOMERS];
+    Customer customers_copy[MAX_CUSTOMERS]; // k-d 트리 구축용 복사본
     
     // 특별히 큰 수요를 가진 고객 목록 (개별 경로 처리용)
     int large_demands[MAX_CUSTOMERS];
@@ -237,13 +372,19 @@ int main()
         customers[index].demand = demand;
         customers[index].visited = false;
         
+        // 복사본도 동일하게 초기화
+        customers_copy[index] = customers[index];
+        
         // 용량의 절반 이상인 큰 수요를 가진 고객은 별도 추적
         if (index > 0 && demand > c/2) {
             large_demands[large_count++] = index;
         }
     }
     
-    // 거리 제곱 행렬 계산 및 저장 (정수형으로 저장하여 부동 소수점 연산 회피)
+    // k-d 트리 구축
+    KDNode* kdtree = build_kdtree(customers_copy, 0, n-1, 0);
+    
+    // 거리 제곱 행렬 계산 및 저장 (일부 핵심 연산에 대해서만 필요할 수 있음)
     int* dist_squared[MAX_CUSTOMERS];
     for (int i = 0; i < n; i++) {
         dist_squared[i] = (int*)malloc(n * sizeof(int));
@@ -400,6 +541,9 @@ int main()
     for (int i = 0; i < n; i++) {
         free(dist_squared[i]);
     }
+    
+    // k-d 트리 메모리 해제
+    free_kdtree(kdtree);
 
     return 0;
 }
