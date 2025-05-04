@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <math.h>
 #include <limits.h>
+#include <float.h>  // DBL_MAX를 위해 추가
 
 #define MAX_CUSTOMERS 100
 #define MAX_ROUTES 20
@@ -230,3 +231,4 @@ int main()
 
     return 0;
 }
+
