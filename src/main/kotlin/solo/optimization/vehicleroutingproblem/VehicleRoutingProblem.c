@@ -24,9 +24,11 @@ typedef struct {
     int total_demand;
 } Route;
 
-// 두 고객 간의 거리 계산 (미리 계산하여 저장)
-double calculate_distance(Customer a, Customer b) {
-    return sqrt(pow(a.x - b.x, 2) + pow(a.y - b.y, 2));
+// 두 점 사이의 거리 제곱 계산 (sqrt 연산 제거로 최적화)
+static int distance_squared(int x1, int y1, int x2, int y2) {
+    int dx = x1 - x2;
+    int dy = y1 - y2;
+    return dx * dx + dy * dy;
 }
 
 /**
@@ -44,154 +46,150 @@ int main()
     
     // 고객 정보 저장
     Customer customers[MAX_CUSTOMERS];
-    // 방문하지 않은 고객 수 추적
-    int remaining_count = n - 1; // 디포(0)는 제외
     
-    // 거리 테이블 미리 계산
-    double distances[MAX_CUSTOMERS][MAX_CUSTOMERS];
+    // 정수형 거리 제곱 테이블 (sqrt 제거로 최적화)
+    int dist_squared[MAX_CUSTOMERS][MAX_CUSTOMERS];
+    
+    // 미방문 고객 목록을 별도로 관리 (탐색 최적화)
+    int unvisited[MAX_CUSTOMERS];
+    int unvisited_count = 0;
     
     for (int i = 0; i < n; i++) {
-        // The index of the customer (0 is the depot)
-        int index;
-        // The x coordinate of the customer
-        int x;
-        // The y coordinate of the customer
-        int y;
-        // The demand
-        int demand;
+        int index, x, y, demand;
         scanf("%d%d%d%d", &index, &x, &y, &demand);
         
-        // 고객 정보 저장
         customers[index].index = index;
         customers[index].x = x;
         customers[index].y = y;
         customers[index].demand = demand;
         customers[index].visited = false;
+        
+        // 디포(0)가 아닌 경우만 미방문 목록에 추가
+        if (index > 0) {
+            unvisited[unvisited_count++] = index;
+        }
     }
     
-    // 거리 테이블 미리 계산
+    // 거리 제곱 테이블 미리 계산 (sqrt 연산 없이)
     for (int i = 0; i < n; i++) {
+        Customer* ci = &customers[i];
         for (int j = 0; j < n; j++) {
-            distances[i][j] = calculate_distance(customers[i], customers[j]);
+            dist_squared[i][j] = distance_squared(ci->x, ci->y, customers[j].x, customers[j].y);
         }
     }
     
     // 경로들을 저장할 배열
-    Route routes[MAX_CUSTOMERS]; // 최악의 경우 각 고객당 하나의 경로
+    Route routes[MAX_CUSTOMERS]; 
     int route_count = 0;
     
-    // Depot는 항상 0번
-    Customer depot = customers[0];
-    
-    // 모든 고객이 방문될 때까지 반복
-    while (remaining_count > 0) {
-        // 새 경로 시작
-        Route current_route;
-        current_route.count = 0;
-        current_route.total_demand = 0;
+    // 경로 생성
+    while (unvisited_count > 0) {
+        Route* current_route = &routes[route_count];
+        current_route->count = 0;
+        current_route->total_demand = 0;
         
-        // 현재 위치는 디포
+        // 현재 위치는 디포(0)
         int current_pos = 0;
+        bool added_to_route = false;
         
-        // 가장 가까운 방문하지 않은 고객을 찾아 경로에 추가
+        // 현재 경로에 고객 추가
         while (true) {
-            double min_dist = INT_MAX;
+            int min_dist = INT_MAX;
             int next_idx = -1;
+            int next_pos_in_unvisited = -1;
             
             // 방문하지 않은 고객들 중에서 가장 가까운 고객 찾기
-            for (int i = 1; i < n; i++) {
-                if (!customers[i].visited && current_route.total_demand + customers[i].demand <= c) {
-                    double dist = distances[current_pos][i];
+            for (int i = 0; i < unvisited_count; i++) {
+                int customer_idx = unvisited[i];
+                if (current_route->total_demand + customers[customer_idx].demand <= c) {
+                    int dist = dist_squared[current_pos][customer_idx];
                     if (dist < min_dist) {
                         min_dist = dist;
-                        next_idx = i;
+                        next_idx = customer_idx;
+                        next_pos_in_unvisited = i;
                     }
                 }
             }
             
-            // 더 이상 추가할 고객이 없다면 종료
+            // 더 이상 추가할 수 없으면 종료
             if (next_idx == -1) break;
             
-            // 고객 추가
-            customers[next_idx].visited = true;
+            // 고객 추가 및 방문 처리
             current_pos = next_idx;
-            current_route.total_demand += customers[next_idx].demand;
+            current_route->customers[current_route->count++] = next_idx;
+            current_route->total_demand += customers[next_idx].demand;
             
-            // 경로에 고객 인덱스 추가
-            current_route.customers[current_route.count++] = next_idx;
-            remaining_count--;
+            // 미방문 목록에서 제거 (스왑 후 크기 감소로 O(1) 시간에 제거)
+            unvisited[next_pos_in_unvisited] = unvisited[--unvisited_count];
+            added_to_route = true;
         }
         
-        // 경로에 고객이 추가되었다면 경로 배열에 저장
-        if (current_route.count > 0) {
-            routes[route_count++] = current_route;
+        // 경로에 고객이 추가되었다면 경로 카운트 증가
+        if (added_to_route) {
+            route_count++;
         } else {
-            // 더 이상 추가할 수 없는데 남은 고객이 있는 경우
-            // 용량 제한으로 추가하지 못하는 경우가 발생함
-            // 각 고객을 개별 경로로 처리
-            for (int i = 1; i < n; i++) {
-                if (!customers[i].visited && customers[i].demand <= c) {
-                    Route single_route;
-                    single_route.count = 1;
-                    single_route.customers[0] = i;
-                    single_route.total_demand = customers[i].demand;
-                    routes[route_count++] = single_route;
-                    customers[i].visited = true;
-                    remaining_count--;
+            // 용량 제한으로 추가할 수 없는 경우
+            // 각 남은 고객을 개별 경로로 처리 (용량 제한 내에서)
+            int i = 0;
+            while (i < unvisited_count) {
+                int idx = unvisited[i];
+                if (customers[idx].demand <= c) {
+                    Route* single_route = &routes[route_count++];
+                    single_route->count = 1;
+                    single_route->customers[0] = idx;
+                    single_route->total_demand = customers[idx].demand;
+                    
+                    // 미방문 목록에서 제거
+                    unvisited[i] = unvisited[--unvisited_count];
+                } else {
+                    // 용량이 너무 커서 처리할 수 없는 고객은 건너뜀
+                    i++;
                 }
             }
             
-            // 용량이 c보다 큰 고객이 있다면 이는 처리할 수 없음
-            // 이 경우는 문제 조건에서 발생하지 않는다고 가정
+            // 더 이상 처리할 수 있는 고객이 없으면 종료
             break;
         }
     }
     
-    // 모든 경로를 출력 문자열로 변환
-    char output[MAX_OUTPUT_SIZE] = "";
-    int output_pos = 0;
+    // 출력 문자열 생성 (최적화)
+    char output[MAX_OUTPUT_SIZE];
+    char* pos = output;
     
     for (int i = 0; i < route_count; i++) {
-        Route route = routes[i];
-        
         // 세미콜론 추가 (첫 경로 제외)
         if (i > 0) {
-            output[output_pos++] = ';';
+            *pos++ = ';';
         }
         
-        // 경로의 모든 고객 추가
-        for (int j = 0; j < route.count; j++) {
+        // 경로의 고객 추가
+        for (int j = 0; j < routes[i].count; j++) {
             // 공백 추가 (첫 고객 제외)
             if (j > 0) {
-                output[output_pos++] = ' ';
+                *pos++ = ' ';
             }
             
-            // 고객 인덱스를 문자열로 변환
-            int idx = route.customers[j];
-            int temp_idx = idx;
-            int digit_count = 0;
+            // 인덱스를 문자열로 변환 (faster itoa)
+            int idx = routes[i].customers[j];
             
-            // 자릿수 계산
-            do {
-                temp_idx /= 10;
-                digit_count++;
-            } while (temp_idx > 0);
-            
-            // 인덱스 추가
-            temp_idx = idx;
-            for (int k = digit_count - 1; k >= 0; k--) {
-                output[output_pos + k] = '0' + (temp_idx % 10);
-                temp_idx /= 10;
+            // 작은 수(1-9)는 직접 처리
+            if (idx < 10) {
+                *pos++ = '0' + idx;
+            } else {
+                // 10 이상의 숫자는 sprintf 사용 (작은 버퍼로 최적화)
+                char num_buf[16];
+                int len = sprintf(num_buf, "%d", idx);
+                memcpy(pos, num_buf, len);
+                pos += len;
             }
-            output_pos += digit_count;
         }
     }
     
     // 널 종료 문자 추가
-    output[output_pos] = '\0';
+    *pos = '\0';
     
-    // 경로가 비어있다면 기본값 출력 (디포 제외)
-    if (output_pos == 0) {
+    // 출력
+    if (route_count == 0) {
         printf("1 2 3;4\n");
     } else {
         printf("%s\n", output);
