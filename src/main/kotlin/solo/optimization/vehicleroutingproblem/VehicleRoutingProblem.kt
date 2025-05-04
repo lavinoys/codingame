@@ -5,16 +5,31 @@ import kotlin.math.pow
 import kotlin.math.round
 import kotlin.math.sqrt
 import kotlin.math.exp
+import kotlin.math.ln
 import kotlin.random.Random
+import kotlin.collections.HashMap
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Challenge yourself with this classic NP-Hard optimization problem !
  **/
 
 // 고객 또는 창고를 나타내는 데이터 클래스
-data class Location(val index: Int, val x: Int, val y: Int, val demand: Int) {
-    fun distanceTo(other: Location): Int {
-        return round(sqrt((x - other.x).toDouble().pow(2) + (y - other.y).toDouble().pow(2))).toInt()
+data class Location(val index: Int, val x: Int, val y: Int, val demand: Int)
+
+// 성능 최적화: 거리 계산 캐시
+object DistanceCache {
+    private val cache = ConcurrentHashMap<Pair<Location, Location>, Int>()
+    
+    fun distanceBetween(a: Location, b: Location): Int {
+        val key = if (a.index <= b.index) Pair(a, b) else Pair(b, a)
+        return cache.computeIfAbsent(key) { (loc1, loc2) ->
+            round(sqrt((loc1.x - loc2.x).toDouble().pow(2) + (loc1.y - loc2.y).toDouble().pow(2))).toInt()
+        }
+    }
+    
+    fun clear() {
+        cache.clear()
     }
 }
 
@@ -22,7 +37,8 @@ data class Location(val index: Int, val x: Int, val y: Int, val demand: Int) {
 class Route(val capacity: Int) {
     val customers = mutableListOf<Location>()
     var currentDemand = 0
-
+    private var totalDistanceCache: Int? = null
+    
     fun canAdd(customer: Location): Boolean {
         return currentDemand + customer.demand <= capacity
     }
@@ -30,18 +46,22 @@ class Route(val capacity: Int) {
     fun add(customer: Location) {
         customers.add(customer)
         currentDemand += customer.demand
+        totalDistanceCache = null // 캐시 무효화
     }
 
     fun getTotalDistance(depot: Location): Int {
+        totalDistanceCache?.let { return it }
+        
         if (customers.isEmpty()) return 0
 
-        var distance = depot.distanceTo(customers.first())
+        var distance = DistanceCache.distanceBetween(depot, customers.first())
         
         for (i in 0 until customers.size - 1) {
-            distance += customers[i].distanceTo(customers[i + 1])
+            distance += DistanceCache.distanceBetween(customers[i], customers[i + 1])
         }
         
-        distance += customers.last().distanceTo(depot)
+        distance += DistanceCache.distanceBetween(customers.last(), depot)
+        totalDistanceCache = distance
         return distance
     }
     
@@ -50,6 +70,7 @@ class Route(val capacity: Int) {
         val copy = Route(capacity)
         copy.customers.addAll(customers)
         copy.currentDemand = currentDemand
+        copy.totalDistanceCache = totalDistanceCache
         return copy
     }
 
@@ -58,10 +79,19 @@ class Route(val capacity: Int) {
     }
 }
 
+// 절약값 저장을 위한 클래스
+data class Saving(val i: Location, val j: Location, val saving: Int)
+
 // 전체 솔루션을 나타내는 클래스
 class Solution(val routes: MutableList<Route>, val depot: Location) {
+    private var totalDistanceCache: Int? = null
+    
     fun getTotalDistance(): Int {
-        return routes.sumOf { it.getTotalDistance(depot) }
+        totalDistanceCache?.let { return it }
+        
+        val distance = routes.sumOf { it.getTotalDistance(depot) }
+        totalDistanceCache = distance
+        return distance
     }
     
     // 솔루션의 깊은 복사본 생성
@@ -98,6 +128,7 @@ class Solution(val routes: MutableList<Route>, val depot: Location) {
             routes.removeAt(fromRouteIdx)
         }
         
+        totalDistanceCache = null // 캐시 무효화
         return true
     }
     
@@ -110,6 +141,7 @@ class Solution(val routes: MutableList<Route>, val depot: Location) {
         route.customers[customerIdx1] = route.customers[customerIdx2]
         route.customers[customerIdx2] = temp
         
+        totalDistanceCache = null // 캐시 무효화
         return true
     }
     
@@ -129,7 +161,105 @@ class Solution(val routes: MutableList<Route>, val depot: Location) {
             right--
         }
         
+        totalDistanceCache = null // 캐시 무효화
         return true
+    }
+    
+    // 3-opt 연산: 경로의 3개 지점에서 최적화
+    fun apply3Opt(routeIdx: Int): Boolean {
+        val route = routes[routeIdx]
+        if (route.customers.size < 6) return false // 최소 6개 이상의 고객이 필요
+        
+        val bestGain = findBest3OptMove(routeIdx)
+        if (bestGain.first <= 0) return false
+        
+        val (i, j, k) = bestGain.second
+        apply3OptMove(routeIdx, i, j, k)
+        
+        totalDistanceCache = null // 캐시 무효화
+        return true
+    }
+    
+    // 최적의 3-opt 이동 찾기
+    private fun findBest3OptMove(routeIdx: Int): Pair<Int, Triple<Int, Int, Int>> {
+        val route = routes[routeIdx]
+        val customers = route.customers
+        val n = customers.size
+        
+        var bestGain = 0
+        var bestMove = Triple(0, 0, 0)
+        
+        // 모든 가능한 3-opt 이동 탐색
+        for (i in 0 until n - 4) {
+            for (j in i + 2 until n - 2) {
+                for (k in j + 2 until n) {
+                    val a = customers[i]
+                    val b = customers[i + 1]
+                    val c = customers[j]
+                    val d = customers[j + 1]
+                    val e = customers[k]
+                    val f = if (k + 1 < n) customers[k + 1] else customers[0]
+                    
+                    // 제거할 간선들
+                    val removed = DistanceCache.distanceBetween(a, b) +
+                                  DistanceCache.distanceBetween(c, d) +
+                                  DistanceCache.distanceBetween(e, f)
+                    
+                    // 케이스 1: a-c b-e d-f
+                    val case1 = DistanceCache.distanceBetween(a, c) +
+                                DistanceCache.distanceBetween(b, e) +
+                                DistanceCache.distanceBetween(d, f)
+                    val gain1 = removed - case1
+                    
+                    // 케이스 2: a-d c-b e-f
+                    val case2 = DistanceCache.distanceBetween(a, d) +
+                                DistanceCache.distanceBetween(c, b) +
+                                DistanceCache.distanceBetween(e, f)
+                    val gain2 = removed - case2
+                    
+                    // 케이스 3: a-c b-d e-f
+                    val case3 = DistanceCache.distanceBetween(a, c) +
+                                DistanceCache.distanceBetween(b, d) +
+                                DistanceCache.distanceBetween(e, f)
+                    val gain3 = removed - case3
+                    
+                    // 케이스 4: a-e d-b c-f
+                    val case4 = DistanceCache.distanceBetween(a, e) +
+                                DistanceCache.distanceBetween(d, b) +
+                                DistanceCache.distanceBetween(c, f)
+                    val gain4 = removed - case4
+                    
+                    val maxGain = maxOf(gain1, gain2, gain3, gain4)
+                    if (maxGain > bestGain) {
+                        bestGain = maxGain
+                        bestMove = Triple(i, j, k)
+                    }
+                }
+            }
+        }
+        
+        return Pair(bestGain, bestMove)
+    }
+    
+    // 3-opt 이동 적용
+    private fun apply3OptMove(routeIdx: Int, i: Int, j: Int, k: Int) {
+        val route = routes[routeIdx]
+        val newRoute = route.deepCopy()
+        newRoute.customers.clear()
+        
+        // 적용 로직 (간소화된 버전)
+        val segment1 = route.customers.subList(0, i + 1)
+        val segment2 = route.customers.subList(i + 1, j + 1)
+        val segment3 = route.customers.subList(j + 1, k + 1)
+        val segment4 = route.customers.subList(k + 1, route.customers.size)
+        
+        newRoute.customers.addAll(segment1)
+        newRoute.customers.addAll(segment3.reversed())
+        newRoute.customers.addAll(segment2.reversed())
+        newRoute.customers.addAll(segment4)
+        
+        route.customers.clear()
+        route.customers.addAll(newRoute.customers)
     }
     
     override fun toString(): String {
@@ -156,87 +286,114 @@ fun main() {
     // 창고와 고객 분리
     val depot = locations.find { it.index == 0 }!!
     val customers = locations.filter { it.index != 0 }
-
-    // 경로 계획 수립 (탐욕 알고리즘으로 초기 솔루션 생성)
-    val initialRoutes = generateInitialRoutes(depot, customers, c)
-    val initialSolution = Solution(initialRoutes.toMutableList(), depot)
+    
+    // 최적화된 초기 솔루션 생성 (Clarke-Wright 절약 알고리즘)
+    val initialRoutes = clarkeWrightSavings(depot, customers, c)
+    val initialSolution = Solution(initialRoutes, depot)
+    
+    // 시간 제한 설정
+    val timeLimit = if (n < 50) 5000L else if (n < 100) 7500L else 9500L
     
     // 시뮬레이티드 어닐링으로 솔루션 최적화
-    val optimizedSolution = simulatedAnnealing(initialSolution, depot)
+    val optimizedSolution = simulatedAnnealing(initialSolution, depot, timeLimit)
     
     // 결과 출력
     println(optimizedSolution.toString())
 }
 
-// 탐욕 알고리즘으로 초기 경로 생성
-fun generateInitialRoutes(depot: Location, customers: List<Location>, capacity: Int): MutableList<Route> {
-    // 가용한 모든 고객 목록
-    val remainingCustomers = customers.toMutableList()
-    // 경로 목록
+// Clarke-Wright 절약 알고리즘으로 초기 경로 생성
+fun clarkeWrightSavings(depot: Location, customers: List<Location>, capacity: Int): MutableList<Route> {
+    // 각 고객을 별도 경로로 초기화
     val routes = mutableListOf<Route>()
+    val customerToRoute = HashMap<Location, Route>()
     
-    // 모든 고객을 방문할 때까지 반복
-    while (remainingCustomers.isNotEmpty()) {
-        val currentRoute = Route(capacity)
-        routes.add(currentRoute)
-        
-        // 현재 위치 (시작은 창고)
-        var currentLocation = depot
-        
-        // 경로에 고객 추가
-        while (remainingCustomers.isNotEmpty()) {
-            // 현재 위치에서 가장 가까운 고객 찾기
-            val nearestCustomer = findNearestCustomer(currentLocation, remainingCustomers, currentRoute)
-                ?: break // 더 이상 추가할 수 있는 고객이 없으면 종료
+    for (customer in customers) {
+        val route = Route(capacity)
+        route.add(customer)
+        routes.add(route)
+        customerToRoute[customer] = route
+    }
+    
+    // 절약값 계산 및 정렬
+    val savings = mutableListOf<Saving>()
+    for (i in customers.indices) {
+        for (j in i + 1 until customers.size) {
+            val customer1 = customers[i]
+            val customer2 = customers[j]
             
-            currentRoute.add(nearestCustomer)
-            currentLocation = nearestCustomer
-            remainingCustomers.remove(nearestCustomer)
+            val saving = DistanceCache.distanceBetween(depot, customer1) +
+                         DistanceCache.distanceBetween(depot, customer2) -
+                         DistanceCache.distanceBetween(customer1, customer2)
+            
+            savings.add(Saving(customer1, customer2, saving))
+        }
+    }
+    
+    savings.sortByDescending { it.saving }
+    
+    // 경로 병합
+    for ((i, j, _) in savings) {
+        val routeI = customerToRoute[i]
+        val routeJ = customerToRoute[j]
+        
+        if (routeI != routeJ && 
+            routeI != null && 
+            routeJ != null && 
+            routeI.currentDemand + routeJ.currentDemand <= capacity) {
+            
+            // i가 routeI의 마지막 요소인지 확인
+            val iIsLast = routeI.customers.last() == i
+            // j가 routeJ의 첫 번째 요소인지 확인
+            val jIsFirst = routeJ.customers.first() == j
+            
+            if (iIsLast && jIsFirst) {
+                // i가 routeI의 마지막이고 j가 routeJ의 첫 번째면 병합
+                for (customer in routeJ.customers) {
+                    routeI.add(customer)
+                    customerToRoute[customer] = routeI
+                }
+                routes.remove(routeJ)
+            }
         }
     }
     
     return routes
 }
 
-// 현재 위치에서 가장 가까운 고객 찾기
-fun findNearestCustomer(currentLocation: Location, customers: List<Location>, route: Route): Location? {
-    var nearest: Location? = null
-    var minDistance = Int.MAX_VALUE
-    
-    for (customer in customers) {
-        // 용량 제한 확인
-        if (!route.canAdd(customer)) continue
-        
-        val distance = currentLocation.distanceTo(customer)
-        if (distance < minDistance) {
-            minDistance = distance
-            nearest = customer
-        }
-    }
-    
-    return nearest
-}
-
-// 시뮬레이티드 어닐링 알고리즘
-fun simulatedAnnealing(initialSolution: Solution, depot: Location): Solution {
+// 시뮬레이티드 어닐링 알고리즘 (개선된 버전)
+fun simulatedAnnealing(initialSolution: Solution, depot: Location, timeLimit: Long = 9000L): Solution {
     var currentSolution = initialSolution
     var bestSolution = currentSolution.deepCopy()
     var bestDistance = currentSolution.getTotalDistance()
     
-    // 시뮬레이티드 어닐링 파라미터
+    // 변수 설정
     var temperature = 100.0
-    val coolingRate = 0.99
-    val iterations = 1000
-    val minTemperature = 0.1
-    
-    // 시간 제한 체크를 위한 변수
+    var alpha = 0.99  // 냉각률
     val startTime = System.currentTimeMillis()
-    val timeLimit = 9000 // 9초 (10초 제한의 안전 마진)
+    var improvement = 0
+    var noImprovement = 0
     
-    while (temperature > minTemperature && (System.currentTimeMillis() - startTime) < timeLimit) {
+    // 적응형 이웃 생성 확률
+    var pMove = 0.4
+    var pSwap = 0.3
+    var p2Opt = 0.2
+    var p3Opt = 0.1
+    
+    // 시간이 허용하는 한 계속 최적화
+    while ((System.currentTimeMillis() - startTime) < timeLimit) {
+        val iterations = minOf(100, (timeLimit - (System.currentTimeMillis() - startTime)) / 10)
+        
+        var iterationImprovement = 0
         for (i in 0 until iterations) {
-            // 새로운 솔루션 생성
-            val newSolution = generateNeighborSolution(currentSolution)
+            // 이웃 솔루션 생성
+            val operationType = when {
+                Random.nextDouble() < pMove -> 0  // 고객 이동
+                Random.nextDouble() < pMove + pSwap -> 1  // 고객 교환
+                Random.nextDouble() < pMove + pSwap + p2Opt -> 2  // 2-opt
+                else -> 3  // 3-opt
+            }
+            
+            val newSolution = generateNeighborSolution(currentSolution, operationType)
             
             // 비용 차이 계산
             val currentDistance = currentSolution.getTotalDistance()
@@ -247,28 +404,53 @@ fun simulatedAnnealing(initialSolution: Solution, depot: Location): Solution {
             if (delta < 0 || Random.nextDouble() < exp(-delta / temperature)) {
                 currentSolution = newSolution
                 
-                // 최적 솔루션 업데이트
+                // 개선 시 최적 솔루션 업데이트
                 if (newDistance < bestDistance) {
                     bestSolution = newSolution.deepCopy()
                     bestDistance = newDistance
+                    iterationImprovement++
+                    improvement++
+                    noImprovement = 0
+                } else {
+                    noImprovement++
                 }
+            } else {
+                noImprovement++
             }
-            
-            // 시간 제한 초과 시 종료
-            if ((System.currentTimeMillis() - startTime) > timeLimit) break
         }
         
         // 온도 감소
-        temperature *= coolingRate
+        temperature *= alpha
+        
+        // 온도가 너무 낮아지면 재가열
+        if (temperature < 0.1) {
+            temperature = 10.0
+        }
+        
+        // 개선사항이 없으면 연산자 가중치 조정
+        if (iterationImprovement == 0 && noImprovement > 1000) {
+            // 3-opt 확률 증가
+            p3Opt = minOf(0.4, p3Opt + 0.05)
+            p2Opt = minOf(0.3, p2Opt + 0.02)
+            pSwap = maxOf(0.15, pSwap - 0.02)
+            pMove = maxOf(0.15, pMove - 0.05)
+            
+            // 학습률 조정
+            alpha = maxOf(0.95, alpha - 0.005)
+            
+            noImprovement = 0
+        }
     }
+    
+    // 최종 솔루션에 대해 경로 최적화 수행
+    optimizeRoutes(bestSolution)
     
     return bestSolution
 }
 
-// 이웃 솔루션 생성
-fun generateNeighborSolution(currentSolution: Solution): Solution {
+// 이웃 솔루션 생성 (지정된 연산자 사용)
+fun generateNeighborSolution(currentSolution: Solution, operationType: Int): Solution {
     val newSolution = currentSolution.deepCopy()
-    val operationType = Random.nextInt(3) // 0: 고객 이동, 1: 고객 교환, 2: 2-opt
     
     when (operationType) {
         0 -> { // 고객 이동
@@ -279,7 +461,13 @@ fun generateNeighborSolution(currentSolution: Solution): Solution {
             
             if (fromRoute.customers.isEmpty()) return newSolution
             
-            val toRouteIdx = Random.nextInt(newSolution.routes.size)
+            var toRouteIdx = Random.nextInt(newSolution.routes.size)
+            // fromRouteIdx와 다른 toRouteIdx 선택
+            var attempts = 0
+            while (fromRouteIdx == toRouteIdx && attempts < 5) {
+                toRouteIdx = Random.nextInt(newSolution.routes.size)
+                attempts++
+            }
             if (fromRouteIdx == toRouteIdx) return newSolution
             
             val fromCustomerIdx = Random.nextInt(fromRoute.customers.size)
@@ -298,9 +486,13 @@ fun generateNeighborSolution(currentSolution: Solution): Solution {
             
             val customerIdx1 = Random.nextInt(route.customers.size)
             var customerIdx2 = Random.nextInt(route.customers.size)
-            while (customerIdx1 == customerIdx2) {
+            // customerIdx1과 다른 customerIdx2 선택
+            var attempts = 0
+            while (customerIdx1 == customerIdx2 && attempts < 5) {
                 customerIdx2 = Random.nextInt(route.customers.size)
+                attempts++
             }
+            if (customerIdx1 == customerIdx2) return newSolution
             
             newSolution.swapCustomers(routeIdx, customerIdx1, customerIdx2)
         }
@@ -317,7 +509,48 @@ fun generateNeighborSolution(currentSolution: Solution): Solution {
             
             newSolution.apply2Opt(routeIdx, i, j)
         }
+        3 -> { // 3-opt
+            if (newSolution.routes.isEmpty()) return newSolution
+            
+            val routesWithEnoughCustomers = newSolution.routes.indices.filter { 
+                newSolution.routes[it].customers.size >= 6 
+            }
+            
+            if (routesWithEnoughCustomers.isEmpty()) return newSolution
+            
+            val routeIdx = routesWithEnoughCustomers.random()
+            newSolution.apply3Opt(routeIdx)
+        }
     }
     
     return newSolution
+}
+
+// 최종 경로 최적화
+fun optimizeRoutes(solution: Solution) {
+    for (routeIdx in solution.routes.indices) {
+        // 각 경로에 2-opt 적용
+        var improved = true
+        while (improved) {
+            improved = false
+            val route = solution.routes[routeIdx]
+            
+            for (i in 0 until route.customers.size - 1) {
+                for (j in i + 1 until route.customers.size) {
+                    val before = route.getTotalDistance(solution.depot)
+                    if (solution.apply2Opt(routeIdx, i, j)) {
+                        val after = route.getTotalDistance(solution.depot)
+                        if (after < before) {
+                            improved = true
+                            break
+                        } else {
+                            // 개선되지 않으면 되돌리기
+                            solution.apply2Opt(routeIdx, i, j)
+                        }
+                    }
+                }
+                if (improved) break
+            }
+        }
+    }
 }
