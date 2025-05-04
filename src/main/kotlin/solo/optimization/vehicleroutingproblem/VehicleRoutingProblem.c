@@ -129,30 +129,38 @@ int main()
         if (all_visited || !any_added) break;
     }
     
-    // 방문하지 못한 고객이 있는 경우, 용량을 무시하고 강제로 경로에 추가
-    bool remaining_customers = false;
-    for (int i = 1; i < n; i++) {
-        if (!customers[i].visited) {
-            remaining_customers = true;
-            break;
+    // 방문하지 못한 고객이 있는 경우, 용량 제한을 고려하여 여러 경로로 추가
+    while (true) {
+        bool remaining_customers = false;
+        for (int i = 1; i < n; i++) {
+            if (!customers[i].visited) {
+                remaining_customers = true;
+                break;
+            }
         }
-    }
-    
-    if (remaining_customers) {
+        
+        if (!remaining_customers) break;
+        
         char forced_route[1000] = "";
         bool first = true;
+        int current_load = 0;
+        Customer current = depot;
         
         for (int i = 1; i < n; i++) {
             if (!customers[i].visited) {
-                // 방문하지 않은 고객들을 강제로 경로에 추가
-                if (!first) {
-                    strcat(forced_route, " ");
+                // 현재 경로의 용량을 확인하고 추가 가능한 경우만 추가
+                if (current_load + customers[i].demand <= c) {
+                    if (!first) {
+                        strcat(forced_route, " ");
+                    }
+                    char temp[10];
+                    sprintf(temp, "%d", i);
+                    strcat(forced_route, temp);
+                    customers[i].visited = true;
+                    first = false;
+                    current_load += customers[i].demand;
+                    current = customers[i];
                 }
-                char temp[10];
-                sprintf(temp, "%d", i);
-                strcat(forced_route, temp);
-                customers[i].visited = true;
-                first = false;
             }
         }
         
@@ -161,6 +169,26 @@ int main()
                 strcat(output, ";");
             }
             strcat(output, forced_route);
+            routes_count++;
+        } else {
+            // 더 이상 추가할 수 없는 경우 (용량 부족)
+            break;
+        }
+    }
+    
+    // 여전히 방문하지 못한 고객이 있는 경우 (용량이 매우 작은 경우)
+    // 각 고객을 개별 경로로 추가
+    for (int i = 1; i < n; i++) {
+        if (!customers[i].visited) {
+            char single_route[20];
+            sprintf(single_route, "%d", i);
+            
+            if (routes_count > 0) {
+                strcat(output, ";");
+            }
+            strcat(output, single_route);
+            routes_count++;
+            customers[i].visited = true;
         }
     }
     
