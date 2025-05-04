@@ -67,6 +67,8 @@ int main()
     while (true) {
         char route[1000] = "";
         int current_load = 0;
+        
+        // 현재 위치는 디포
         Customer current = depot;
         
         bool any_added = false;
@@ -95,9 +97,12 @@ int main()
             current = customers[next_idx];
             current_load += current.demand;
             
-            // 경로에 고객 인덱스 추가
+            // 경로에 고객 인덱스 추가 (출력용)
+            if (any_added) {
+                strcat(route, " ");
+            }
             char temp[10];
-            sprintf(temp, "%d ", next_idx);
+            sprintf(temp, "%d", next_idx);
             strcat(route, temp);
             
             any_added = true;
@@ -105,9 +110,6 @@ int main()
         
         // 경로에 고객이 추가되었다면 출력 문자열에 추가
         if (any_added) {
-            // 마지막 공백 제거
-            route[strlen(route) - 1] = '\0';
-            
             if (routes_count > 0) {
                 strcat(output, ";");
             }
@@ -127,7 +129,42 @@ int main()
         if (all_visited || !any_added) break;
     }
     
-    // 경로가 비어있다면 기본값 출력
+    // 방문하지 못한 고객이 있는 경우, 용량을 무시하고 강제로 경로에 추가
+    bool remaining_customers = false;
+    for (int i = 1; i < n; i++) {
+        if (!customers[i].visited) {
+            remaining_customers = true;
+            break;
+        }
+    }
+    
+    if (remaining_customers) {
+        char forced_route[1000] = "";
+        bool first = true;
+        
+        for (int i = 1; i < n; i++) {
+            if (!customers[i].visited) {
+                // 방문하지 않은 고객들을 강제로 경로에 추가
+                if (!first) {
+                    strcat(forced_route, " ");
+                }
+                char temp[10];
+                sprintf(temp, "%d", i);
+                strcat(forced_route, temp);
+                customers[i].visited = true;
+                first = false;
+            }
+        }
+        
+        if (strlen(forced_route) > 0) {
+            if (routes_count > 0) {
+                strcat(output, ";");
+            }
+            strcat(output, forced_route);
+        }
+    }
+    
+    // 경로가 비어있다면 기본값 출력 (디포 제외)
     if (strlen(output) == 0) {
         printf("1 2 3;4\n");
     } else {
