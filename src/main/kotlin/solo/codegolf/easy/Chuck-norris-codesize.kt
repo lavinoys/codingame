@@ -1,4 +1,4 @@
-package codegolf.easy
+package solo.codegolf.easy
 
 import java.util.Scanner
 

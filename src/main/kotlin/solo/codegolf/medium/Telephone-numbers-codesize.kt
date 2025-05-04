@@ -1,4 +1,4 @@
-package codegolf.medium
+package solo.codegolf.medium
 
 /**
  * Auto-generated code below aims at helping you parse
