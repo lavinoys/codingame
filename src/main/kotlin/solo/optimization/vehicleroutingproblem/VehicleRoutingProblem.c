@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <math.h>
 #include <limits.h>
-#include <float.h>  // DBL_MAX를 위해 추가
+#include <float.h>
 
 #define MAX_CUSTOMERS 100
 #define MAX_ROUTES 20
@@ -23,49 +23,37 @@ typedef struct {
     int total_demand;
 } Route;
 
-// 두 지점 사이의 유클리드 거리 계산
-double calculate_distance(Customer a, Customer b) {
-    return sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
+// 두 지점 사이의 거리 제곱 계산 (sqrt 제거로 성능 향상)
+static inline int distance_squared(const Customer* a, const Customer* b) {
+    int dx = a->x - b->x;
+    int dy = a->y - b->y;
+    return dx * dx + dy * dy;
 }
 
 // 경로 내의 두 고객 위치를 교환하여 개선 시도 (2-opt)
-bool improve_route(Route* route, Customer* customers, double** distances) {
+static bool improve_route(Route* route, const Customer* customers, const int** dist_squared) {
     if (route->count < 2) return false;
     
     bool improved = false;
     
     for (int i = 0; i < route->count - 1; i++) {
+        int cust_i = route->customers[i];
+        int cust_i_next = route->customers[i+1];
+        
         for (int j = i + 1; j < route->count; j++) {
-            // 현재 경로: ... - i - (i+1) - ... - j - (j+1) - ...
-            // 새 경로:   ... - i - j - ... - (i+1) - (j+1) - ...
+            int cust_j = route->customers[j];
+            int cust_j_next = (j < route->count - 1) ? route->customers[j+1] : 0;
+            int cust_i_prev = (i > 0) ? route->customers[i-1] : 0;
             
-            double current_cost = 0;
-            if (i > 0) {
-                current_cost += distances[route->customers[i-1]][route->customers[i]];
-            } else {
-                current_cost += distances[0][route->customers[i]]; // 디포에서 시작
-            }
-            current_cost += distances[route->customers[i]][route->customers[i+1]];
+            // 현재 비용 계산
+            int current_cost = dist_squared[cust_i_prev][cust_i] + 
+                              dist_squared[cust_i][cust_i_next] + 
+                              dist_squared[cust_j][cust_j_next];
             
-            if (j < route->count - 1) {
-                current_cost += distances[route->customers[j]][route->customers[j+1]];
-            } else {
-                current_cost += distances[route->customers[j]][0]; // 디포로 돌아감
-            }
-            
-            double new_cost = 0;
-            if (i > 0) {
-                new_cost += distances[route->customers[i-1]][route->customers[j]];
-            } else {
-                new_cost += distances[0][route->customers[j]]; // 디포에서 시작
-            }
-            new_cost += distances[route->customers[j]][route->customers[i+1]];
-            
-            if (j < route->count - 1) {
-                new_cost += distances[route->customers[i]][route->customers[j+1]];
-            } else {
-                new_cost += distances[route->customers[i]][0]; // 디포로 돌아감
-            }
+            // 새 연결 비용 계산
+            int new_cost = dist_squared[cust_i_prev][cust_j] + 
+                          dist_squared[cust_j][cust_i_next] + 
+                          dist_squared[cust_i][cust_j_next];
             
             if (new_cost < current_cost) {
                 // 경로 개선을 위해 i+1부터 j까지의 고객들 순서를 뒤집음
@@ -79,6 +67,8 @@ bool improve_route(Route* route, Customer* customers, double** distances) {
                     end--;
                 }
                 improved = true;
+                // 개선된 경우 즉시 다음 i로 이동
+                break;
             }
         }
     }
@@ -101,17 +91,13 @@ int main()
     
     // 고객 정보 저장
     Customer customers[MAX_CUSTOMERS];
-    bool unvisited[MAX_CUSTOMERS];
+    
+    // 방문 여부 추적을 위한 배열 (초기화)
+    int unvisited[MAX_CUSTOMERS];
+    int unvisited_count = 0;
     
     for (int i = 0; i < n; i++) {
-        // The index of the customer (0 is the depot)
-        int index;
-        // The x coordinate of the customer
-        int x;
-        // The y coordinate of the customer
-        int y;
-        // The demand
-        int demand;
+        int index, x, y, demand;
         scanf("%d%d%d%d", &index, &x, &y, &demand);
         
         customers[index].index = index;
@@ -121,25 +107,24 @@ int main()
         customers[index].visited = false;
         
         if (index > 0) { // 디포(0)는 방문할 필요 없음
-            unvisited[index] = true;
+            unvisited[unvisited_count++] = index;
         }
     }
     
-    // 거리 행렬 계산 및 저장
-    double** distances = (double**)malloc(n * sizeof(double*));
+    // 거리 제곱 행렬 계산 및 저장 (정수형으로 저장하여 부동 소수점 연산 회피)
+    int* dist_squared[MAX_CUSTOMERS];
     for (int i = 0; i < n; i++) {
-        distances[i] = (double*)malloc(n * sizeof(double));
+        dist_squared[i] = (int*)malloc(n * sizeof(int));
         for (int j = 0; j < n; j++) {
-            distances[i][j] = calculate_distance(customers[i], customers[j]);
+            dist_squared[i][j] = distance_squared(&customers[i], &customers[j]);
         }
     }
     
     // 경로 생성
     Route routes[MAX_ROUTES];
     int route_count = 0;
-    int remaining_customers = n - 1; // 디포(0) 제외
     
-    while (remaining_customers > 0) {
+    while (unvisited_count > 0) {
         Route* current_route = &routes[route_count];
         current_route->count = 0;
         current_route->total_demand = 0;
@@ -147,31 +132,34 @@ int main()
         int current_customer = 0; // 디포에서 시작
         
         while (true) {
-            double min_distance = DBL_MAX;
+            int min_dist = INT_MAX;
             int next_customer = -1;
+            int next_idx_in_unvisited = -1;
             
             // 가장 가까운 미방문 고객 찾기
-            for (int i = 1; i < n; i++) {
-                if (unvisited[i] && current_route->total_demand + customers[i].demand <= c) {
-                    double dist = distances[current_customer][i];
-                    if (dist < min_distance) {
-                        min_distance = dist;
-                        next_customer = i;
+            for (int i = 0; i < unvisited_count; i++) {
+                int cust_idx = unvisited[i];
+                if (current_route->total_demand + customers[cust_idx].demand <= c) {
+                    int dist = dist_squared[current_customer][cust_idx];
+                    if (dist < min_dist) {
+                        min_dist = dist;
+                        next_customer = cust_idx;
+                        next_idx_in_unvisited = i;
                     }
                 }
             }
             
             // 더 이상 방문할 고객이 없으면 현재 경로 종료
-            if (next_customer == -1) {
-                break;
-            }
+            if (next_customer == -1) break;
             
             // 고객 추가
             current_route->customers[current_route->count++] = next_customer;
             current_route->total_demand += customers[next_customer].demand;
-            unvisited[next_customer] = false;
+            
+            // 미방문 배열에서 제거 (O(1) 시간에 처리하기 위해 스왑 후 크기 감소)
+            unvisited[next_idx_in_unvisited] = unvisited[--unvisited_count];
+            
             current_customer = next_customer;
-            remaining_customers--;
         }
         
         // 경로에 고객이 추가된 경우에만 경로 개수 증가
@@ -179,15 +167,21 @@ int main()
             route_count++;
         } else {
             // 용량 제약으로 인해 경로를 구성할 수 없는 경우
-            // 남은 고객들 중 용량이 가장 작은 고객부터 개별 경로 할당
-            for (int i = 1; i < n; i++) {
-                if (unvisited[i] && customers[i].demand <= c) {
+            // 남은 고객들 중에서 개별 경로 할당
+            int i = 0;
+            while (i < unvisited_count) {
+                int cust_idx = unvisited[i];
+                if (customers[cust_idx].demand <= c) {
                     Route* single_route = &routes[route_count++];
                     single_route->count = 1;
-                    single_route->customers[0] = i;
-                    single_route->total_demand = customers[i].demand;
-                    unvisited[i] = false;
-                    remaining_customers--;
+                    single_route->customers[0] = cust_idx;
+                    single_route->total_demand = customers[cust_idx].demand;
+                    
+                    // 미방문 목록에서 제거
+                    unvisited[i] = unvisited[--unvisited_count];
+                } else {
+                    // 용량을 초과하는 고객은 처리할 수 없음 (문제 조건에서는 이런 경우가 없다고 가정)
+                    i++;
                 }
             }
         }
@@ -195,40 +189,54 @@ int main()
     
     // 2-opt를 사용하여 각 경로 개선
     for (int r = 0; r < route_count; r++) {
-        bool improved = true;
-        while (improved) {
-            improved = improve_route(&routes[r], customers, distances);
+        Route* route = &routes[r];
+        if (route->count < 2) continue;
+        
+        // 최대 3번만 반복 (계속 반복하는 것은 비효율적일 수 있음)
+        int max_iterations = 3;
+        for (int iter = 0; iter < max_iterations; iter++) {
+            if (!improve_route(route, customers, (const int**)dist_squared)) {
+                break;
+            }
         }
     }
     
-    // 출력 형식 구성: 세미콜론으로 경로 구분, 공백으로 고객 구분
-    char output[10000] = "";
+    // 출력 문자열 생성 (최적화)
+    char output[10000];
+    char* pos = output;
     
     for (int r = 0; r < route_count; r++) {
         if (r > 0) {
-            strcat(output, ";");
+            *pos++ = ';';
         }
         
         for (int i = 0; i < routes[r].count; i++) {
-            char customer[10];
-            sprintf(customer, "%d", routes[r].customers[i]);
-            
             if (i > 0) {
-                strcat(output, " ");
+                *pos++ = ' ';
             }
-            strcat(output, customer);
+            
+            // 더 효율적인 정수-문자열 변환
+            int idx = routes[r].customers[i];
+            if (idx < 10) {
+                *pos++ = '0' + idx;
+            } else if (idx < 100) {
+                *pos++ = '0' + (idx / 10);
+                *pos++ = '0' + (idx % 10);
+            } else {
+                // 3자리 이상 숫자는 sprintf 사용
+                pos += sprintf(pos, "%d", idx);
+            }
         }
     }
     
-    // 결과 출력
+    *pos = '\0';
+    
     printf("%s\n", output);
     
     // 메모리 해제
     for (int i = 0; i < n; i++) {
-        free(distances[i]);
+        free(dist_squared[i]);
     }
-    free(distances);
 
     return 0;
 }
-
