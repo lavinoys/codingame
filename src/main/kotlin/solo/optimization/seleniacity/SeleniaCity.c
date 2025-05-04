@@ -139,11 +139,17 @@ bool can_build_tube(int building_id1, int building_id2) {
     return true;
 }
 
-// 튜브 비용 계산
+// 튜브 비용 계산 수정
 int calculate_tube_cost(int building_id1, int building_id2) {
-    Building *b1 = &buildings[building_id1];
-    Building *b2 = &buildings[building_id2];
-    double distance = calculate_distance(b1->x, b1->y, b2->x, b2->y);
+    int b1_idx = find_building_index(building_id1);
+    int b2_idx = find_building_index(building_id2);
+    
+    if (b1_idx == -1 || b2_idx == -1) {
+        return 1000000; // 매우 큰 값으로 설정하여 건설 불가능하게 함
+    }
+    
+    double distance = calculate_distance(buildings[b1_idx].x, buildings[b1_idx].y, 
+                                        buildings[b2_idx].x, buildings[b2_idx].y);
     
     // 0.1km당 1 자원, 내림
     return (int)(distance / 100);
@@ -257,9 +263,10 @@ void update_building_info(int id, int type, int x, int y) {
     }
 }
 
-// 게임 전략 실행
+// 게임 전략 실행 수정
 void execute_strategy(int resources) {
     char actions[1024] = "";
+    int original_resources = resources; // 원래 자원 저장
     
     // 첫 번째 달: 착륙장과 해당하는 모듈 간에 튜브 연결
     if (month == 0) {
@@ -274,7 +281,7 @@ void execute_strategy(int resources) {
         }
         
         // 각 착륙장과 가까운 모듈 연결
-        for (int i = 0; i < landing_pad_count && resources > 1000; i++) {
+        for (int i = 0; i < landing_pad_count && resources > 0; i++) {
             Building* landing = &buildings[landing_pads[i]];
             
             // 각 우주비행사 타입에 대해 가장 가까운 모듈 찾기
@@ -301,7 +308,7 @@ void execute_strategy(int resources) {
                         
                         if (can_build_tube(landing_id, module_id)) {
                             int cost = calculate_tube_cost(landing_id, module_id);
-                            if (cost <= resources) {
+                            if (cost <= resources && cost > 0) {
                                 char tube_command[50];
                                 sprintf(tube_command, "%sTUBE %d %d;", actions[0] ? "" : "", landing_id, module_id);
                                 strcat(actions, tube_command);
@@ -329,7 +336,7 @@ void execute_strategy(int resources) {
             }
         }
         
-        // 초기 포드 생성
+        // 초기 포드 생성 - 비용 확인
         if (resources >= POD_COST) {
             char pod_command[100];
             
@@ -347,8 +354,9 @@ void execute_strategy(int resources) {
         }
     } else {
         // 이후 달: 네트워크 확장 및 업그레이드
-        // 새 건물들을 기존 네트워크에 연결
-        for (int i = 0; i < building_count && resources > 1000; i++) {
+        
+        // 새 건물들을 기존 네트워크에 연결 - 비용 확인 후 연결
+        for (int i = 0; i < building_count && resources > 0; i++) {
             if (buildings[i].route_count == 0) {
                 // 가장 가까운 건물 찾기
                 int closest_building = -1;
@@ -364,14 +372,14 @@ void execute_strategy(int resources) {
                     }
                 }
                 
-                // 연결 시도
+                // 연결 시도 전 비용 확인
                 if (closest_building != -1) {
                     int id1 = buildings[i].id;
                     int id2 = buildings[closest_building].id;
                     
                     if (can_build_tube(id1, id2)) {
                         int cost = calculate_tube_cost(id1, id2);
-                        if (cost <= resources) {
+                        if (cost <= resources && cost > 0) {
                             char command[50];
                             sprintf(command, "%sTUBE %d %d", actions[0] ? ";" : "", id1, id2);
                             strcat(actions, command);
@@ -382,20 +390,26 @@ void execute_strategy(int resources) {
             }
         }
         
-        // 혼잡한 튜브 업그레이드
-        for (int i = 0; i < route_count && resources > 1000; i++) {
+        // 혼잡한 튜브 업그레이드 - 비용 계산 확인 후 업그레이드
+        int upgrades_done = 0; // 각 턴에 업그레이드 수 제한
+        
+        for (int i = 0; i < route_count && resources > 0 && upgrades_done < 2; i++) {
             if (routes[i].capacity > 0 && routes[i].capacity < 3) {  // 용량이 3 미만인 튜브만 업그레이드
-                int cost = calculate_tube_cost(routes[i].building1, routes[i].building2) * (routes[i].capacity + 1);
-                if (cost <= resources) {
+                int base_cost = calculate_tube_cost(routes[i].building1, routes[i].building2);
+                int upgrade_cost = base_cost * (routes[i].capacity + 1);
+                
+                // 충분한 자원이 있는 경우에만 업그레이드
+                if (upgrade_cost <= resources && upgrade_cost > 0) {
                     char command[50];
                     sprintf(command, "%sUPGRADE %d %d", actions[0] ? ";" : "", routes[i].building1, routes[i].building2);
                     strcat(actions, command);
-                    resources -= cost;
+                    resources -= upgrade_cost;
+                    upgrades_done++;
                 }
             }
         }
         
-        // 중요 경로에 텔레포터 설치
+        // 중요 경로에 텔레포터 설치 - 충분한 자원 확인
         if (resources >= TELEPORT_COST && month >= 5) {
             // 가장 멀리 떨어진 착륙장-모듈 쌍 찾기
             int landing_pad_id = -1;
@@ -433,25 +447,37 @@ void execute_strategy(int resources) {
             }
         }
         
-        // 추가 포드 생성
-        while (pod_count < 5 && resources >= POD_COST) {
+        // 추가 포드 생성 - 각 턴에 생성할 포드 수 제한
+        int pods_created = 0;
+        while (pods_created < 2 && resources >= POD_COST) {
             // 가장 활용도가 높은 튜브 찾기
             if (route_count > 0) {
                 int route_idx = pod_count % route_count;  // 단순히 고르게 분배
-                int b1 = routes[route_idx].building1;
-                int b2 = routes[route_idx].building2;
+                int b1_id = routes[route_idx].building1;
+                int b2_id = routes[route_idx].building2;
                 
-                char command[100];
-                sprintf(command, "%sPOD %d %d %d %d %d", 
-                       actions[0] ? ";" : "", pod_count + 1, b1, b2, b1, b2);
-                strcat(actions, command);
-                resources -= POD_COST;
-                pod_count++;
+                // 건물 ID가 실제 존재하는지 확인
+                int b1_idx = find_building_index(b1_id);
+                int b2_idx = find_building_index(b2_id);
+                
+                if (b1_idx != -1 && b2_idx != -1) {
+                    char command[100];
+                    sprintf(command, "%sPOD %d %d %d %d %d", 
+                           actions[0] ? ";" : "", pod_count + 1, b1_id, b2_id, b1_id, b2_id);
+                    strcat(actions, command);
+                    resources -= POD_COST;
+                    pod_count++;
+                    pods_created++;
+                }
             } else {
                 break;
             }
         }
     }
+    
+    // 디버깅용 - 자원 사용량 확인
+    fprintf(stderr, "Month %d: Resources before=%d, after=%d, used=%d\n", 
+            month, original_resources, resources, original_resources - resources);
     
     // 명령 실행 (또는 WAIT)
     if (actions[0]) {
@@ -469,6 +495,10 @@ int main()
     while (1) {
         int resources;
         scanf("%d", &resources);
+        
+        // 디버깅용 - 각 턴마다 자원 확인
+        fprintf(stderr, "Starting month %d with %d resources\n", month, resources);
+        
         int num_travel_routes;
         scanf("%d", &num_travel_routes);
         
