@@ -64,6 +64,7 @@ void parse_building_properties(char* properties);
 void parse_pod_properties(char* properties);
 void update_building_info(int id, int type, int x, int y);
 void execute_strategy(int resources);
+int find_building_index(int id);
 
 // 두 점 사이의 거리 계산
 double calculate_distance(int x1, int y1, int x2, int y2) {
@@ -148,6 +149,16 @@ int calculate_tube_cost(int building_id1, int building_id2) {
     return (int)(distance / 100);
 }
 
+// 건물 ID로 인덱스를 찾는 함수 추가
+int find_building_index(int id) {
+    for (int i = 0; i < building_count; i++) {
+        if (buildings[i].id == id) {
+            return i;
+        }
+    }
+    return -1; // 건물을 찾지 못함
+}
+
 // 건물 정보 파싱
 void parse_building_properties(char* properties) {
     int values[504]; // 최대 500 astronauts + 4 parameters
@@ -170,9 +181,12 @@ void parse_building_properties(char* properties) {
     // 착륙장이라면 우주비행사 정보도 저장
     if (type == LANDING_PAD) {
         int astronaut_count = values[4];
-        for (int i = 0; i < astronaut_count && i + 5 < count; i++) {
-            int astronaut_type = values[i + 5];
-            buildings[id].astronaut_count[astronaut_type]++;
+        int building_idx = find_building_index(id);
+        if (building_idx != -1) {
+            for (int i = 0; i < astronaut_count && i + 5 < count; i++) {
+                int astronaut_type = values[i + 5];
+                buildings[building_idx].astronaut_count[astronaut_type]++;
+            }
         }
     }
 }
@@ -300,8 +314,14 @@ void execute_strategy(int resources) {
                                 route->capacity = 1;
                                 route->length = min_distance;
                                 
-                                buildings[landing_pads[i]].connected_routes[buildings[landing_pads[i]].route_count++] = route_count - 1;
-                                buildings[closest_module].connected_routes[buildings[closest_module].route_count++] = route_count - 1;
+                                // 건물 인덱스 찾기
+                                int landing_idx = find_building_index(landing_id);
+                                int module_idx = find_building_index(module_id);
+                                
+                                if (landing_idx != -1 && module_idx != -1) {
+                                    buildings[landing_idx].connected_routes[buildings[landing_idx].route_count++] = route_count - 1;
+                                    buildings[module_idx].connected_routes[buildings[module_idx].route_count++] = route_count - 1;
+                                }
                             }
                         }
                     }
@@ -451,6 +471,12 @@ int main()
         scanf("%d", &resources);
         int num_travel_routes;
         scanf("%d", &num_travel_routes);
+        
+        // 각 건물의 route_count 초기화
+        for (int i = 0; i < building_count; i++) {
+            buildings[i].route_count = 0;
+        }
+        
         route_count = 0;
         
         for (int i = 0; i < num_travel_routes; i++) {
@@ -465,19 +491,25 @@ int main()
             routes[route_count].capacity = capacity;
             
             // 길이 계산
-            for (int j = 0; j < building_count; j++) {
-                if (buildings[j].id == building_id_1) {
-                    for (int k = 0; k < building_count; k++) {
-                        if (buildings[k].id == building_id_2) {
-                            routes[route_count].length = calculate_distance(
-                                buildings[j].x, buildings[j].y,
-                                buildings[k].x, buildings[k].y
-                            );
-                            break;
-                        }
-                    }
-                    break;
+            int b1_idx = find_building_index(building_id_1);
+            int b2_idx = find_building_index(building_id_2);
+            
+            if (b1_idx != -1 && b2_idx != -1) {
+                routes[route_count].length = calculate_distance(
+                    buildings[b1_idx].x, buildings[b1_idx].y,
+                    buildings[b2_idx].x, buildings[b2_idx].y
+                );
+                
+                // 건물의 연결 정보 업데이트
+                if (buildings[b1_idx].route_count < 5) {
+                    buildings[b1_idx].connected_routes[buildings[b1_idx].route_count++] = route_count;
                 }
+                if (buildings[b2_idx].route_count < 5) {
+                    buildings[b2_idx].connected_routes[buildings[b2_idx].route_count++] = route_count;
+                }
+            } else {
+                // 건물을 찾지 못한 경우 길이 0으로 설정
+                routes[route_count].length = 0;
             }
             
             route_count++;
