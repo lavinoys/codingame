@@ -12,6 +12,14 @@ private external fun scoreWordNative(
     possibleWordsSize: Int
 ): Int
 
+// 추가: filterPossibleWords를 위한 JNI 함수 선언
+private external fun filterPossibleWordsNative(
+    words: Array<String>,
+    wordsSize: Int,
+    guess: String,
+    states: IntArray
+): Array<String>
+
 // C 코드 컴파일 및 로드를 처리하는 객체
 object NativeHelper {
     private var nativeLibraryLoaded = false
@@ -114,6 +122,38 @@ int add(HashSet* set, char element) {
     return 0; // 용량 부족
 }
 
+// 단어 목록을 저장하기 위한 구조체
+typedef struct {
+    char** words;
+    int size;
+    int capacity;
+} WordList;
+
+WordList* createWordList(int capacity) {
+    WordList* list = (WordList*)malloc(sizeof(WordList));
+    list->words = (char**)malloc(sizeof(char*) * capacity);
+    list->size = 0;
+    list->capacity = capacity;
+    return list;
+}
+
+void addWord(WordList* list, const char* word) {
+    if (list->size < list->capacity) {
+        int len = strlen(word);
+        list->words[list->size] = (char*)malloc((len + 1) * sizeof(char));
+        strcpy(list->words[list->size], word);
+        list->size++;
+    }
+}
+
+void freeWordList(WordList* list) {
+    for (int i = 0; i < list->size; i++) {
+        free(list->words[i]);
+    }
+    free(list->words);
+    free(list);
+}
+
 // Kotlin scoreWord 함수의 C 구현
 JNIEXPORT jint JNICALL Java_solo_optimization_wordle_WordleJniKt_scoreWordNative(
     JNIEnv* env, 
@@ -162,6 +202,170 @@ JNIEXPORT jint JNICALL Java_solo_optimization_wordle_WordleJniKt_scoreWordNative
     freeHashSet(uniqueLetters);
     
     return score;
+}
+
+// 배열에 특정 값이 있는지 확인하는 헬퍼 함수
+int contains(int* array, int size, int value) {
+    for (int i = 0; i < size; i++) {
+        if (array[i] == value) return 1;
+    }
+    return 0;
+}
+
+// Kotlin filterPossibleWords 함수의 C 구현
+JNIEXPORT jobjectArray JNICALL Java_solo_optimization_wordle_WordleJniKt_filterPossibleWordsNative(
+    JNIEnv* env,
+    jclass cls,
+    jobjectArray words,
+    jint wordsSize,
+    jstring guess,
+    jintArray statesArray
+) {
+    // JNI 인자 변환
+    const char* guessStr = (*env)->GetStringUTFChars(env, guess, NULL);
+    jint* states = (*env)->GetIntArrayElements(env, statesArray, NULL);
+    
+    // 결과를 저장할 WordList 생성
+    WordList* filtered = createWordList(wordsSize);
+    
+    // 각 위치별 확정 글자 (상태 3)
+    char confirmedLetters[6];
+    memset(confirmedLetters, ' ', sizeof(confirmedLetters));
+    
+    // 단어에 포함되어야 하는 글자들 (상태 2)
+    HashMap* mustInclude = createHashMap(26);
+    
+    // 단어에 포함되지 않아야 하는 글자들 (상태 1)
+    HashSet* mustExclude = createHashSet(26);
+    
+    // 위치별 사용할 수 없는 글자 (상태 2 - 이 위치에는 올 수 없음)
+    HashSet* positionExclude[6];
+    for (int i = 0; i < 6; i++) {
+        positionExclude[i] = createHashSet(26);
+    }
+    
+    // 상태 정보 분석
+    for (int i = 0; i < 6; i++) {
+        char c = guessStr[i];
+        int state = states[i];
+        
+        if (state == 1) {
+            // 다른 위치에 이 글자가 상태 2나 3으로 존재하는지 확인
+            int existsElsewhere = 0;
+            for (int j = 0; j < 6; j++) {
+                if (j != i && (states[j] == 2 || states[j] == 3) && guessStr[j] == c) {
+                    existsElsewhere = 1;
+                    break;
+                }
+            }
+            
+            if (!existsElsewhere) {
+                add(mustExclude, c);
+            }
+        } else if (state == 2) {
+            // 글자는 단어에 있지만 이 위치는 아님
+            add(positionExclude[i], c);
+            put(mustInclude, c, get(mustInclude, c, 0) + 1);
+        } else if (state == 3) {
+            // 글자가 정확한 위치에 있음
+            confirmedLetters[i] = c;
+            put(mustInclude, c, get(mustInclude, c, 0) + 1);
+        }
+    }
+    
+    // 필터링
+    for (int wordIdx = 0; wordIdx < wordsSize; wordIdx++) {
+        jstring jWord = (jstring)(*env)->GetObjectArrayElement(env, words, wordIdx);
+        const char* word = (*env)->GetStringUTFChars(env, jWord, NULL);
+        int isValid = 1;
+        
+        // 확정 글자 검사
+        for (int i = 0; i < 6; i++) {
+            if (confirmedLetters[i] != ' ' && word[i] != confirmedLetters[i]) {
+                isValid = 0;
+                break;
+            }
+        }
+        
+        // 위치별 제외 글자 검사
+        if (isValid) {
+            for (int i = 0; i < 6; i++) {
+                HashSet* exclude = positionExclude[i];
+                for (int j = 0; j < exclude->size; j++) {
+                    if (word[i] == exclude->elements[j]) {
+                        isValid = 0;
+                        break;
+                    }
+                }
+                if (!isValid) break;
+            }
+        }
+        
+        // 포함/제외 글자 검사
+        if (isValid) {
+            HashMap* letterCount = createHashMap(26);
+            
+            // 글자 빈도 계산
+            for (int i = 0; i < 6; i++) {
+                char c = word[i];
+                put(letterCount, c, get(letterCount, c, 0) + 1);
+            }
+            
+            // 필수 포함 글자 검사
+            for (int i = 0; i < mustInclude->size; i++) {
+                char c = mustInclude->entries[i].key;
+                int requiredCount = mustInclude->entries[i].value;
+                if (get(letterCount, c, 0) < requiredCount) {
+                    isValid = 0;
+                    break;
+                }
+            }
+            
+            // 제외 글자 검사
+            if (isValid) {
+                for (int i = 0; i < mustExclude->size; i++) {
+                    char c = mustExclude->elements[i];
+                    if (get(letterCount, c, 0) > 0) {
+                        isValid = 0;
+                        break;
+                    }
+                }
+            }
+            
+            freeHashMap(letterCount);
+        }
+        
+        if (isValid) {
+            addWord(filtered, word);
+        }
+        
+        (*env)->ReleaseStringUTFChars(env, jWord, word);
+        (*env)->DeleteLocalRef(env, jWord);
+    }
+    
+    // Java 문자열 배열 생성
+    jclass stringClass = (*env)->FindClass(env, "java/lang/String");
+    jobjectArray result = (*env)->NewObjectArray(env, filtered->size, stringClass, NULL);
+    
+    // 결과 배열 채우기
+    for (int i = 0; i < filtered->size; i++) {
+        jstring jStr = (*env)->NewStringUTF(env, filtered->words[i]);
+        (*env)->SetObjectArrayElement(env, result, i, jStr);
+        (*env)->DeleteLocalRef(env, jStr);
+    }
+    
+    // 메모리 정리
+    (*env)->ReleaseStringUTFChars(env, guess, guessStr);
+    (*env)->ReleaseIntArrayElements(env, statesArray, states, JNI_ABORT);
+    
+    for (int i = 0; i < 6; i++) {
+        freeHashSet(positionExclude[i]);
+    }
+    freeHashMap(mustInclude);
+    freeHashSet(mustExclude);
+    freeWordList(filtered);
+    
+    return result;
 }
 """
             
@@ -252,89 +456,98 @@ fun main() {
 
 // 이전 추측 결과를 바탕으로 가능한 단어를 필터링
 fun filterPossibleWords(words: ArrayList<String>, guess: String, states: IntArray): ArrayList<String> {
-    val filtered = ArrayList<String>()
-    
-    // 각 위치별 확정 글자 (상태 3)
-    val confirmedLetters = CharArray(6) { ' ' }
-    // 단어에 포함되어야 하는 글자들 (상태 2)
-    val mustInclude = HashMap<Char, Int>()
-    // 단어에 포함되지 않아야 하는 글자들 (상태 1)
-    val mustExclude = HashSet<Char>()
-    // 위치별 사용할 수 없는 글자 (상태 2 - 이 위치에는 올 수 없음)
-    val positionExclude = Array(6) { HashSet<Char>() }
-    
-    // 상태 정보 분석
-    for (i in 0 until 6) {
-        val char = guess[i]
-        when (states[i]) {
-            1 -> {
-                // 다른 위치에 이 글자가 상태 2나 3으로 존재하는지 확인
-                val existsElsewhere = (0 until 6).any { j -> j != i && (states[j] == 2 || states[j] == 3) && guess[j] == char }
-                if (!existsElsewhere) {
-                    mustExclude.add(char)
+    try {
+        // JNI를 통한 네이티브 구현 호출 시도
+        val result = filterPossibleWordsNative(words.toTypedArray(), words.size, guess, states)
+        return ArrayList(result.toList())
+    } catch (e: UnsatisfiedLinkError) {
+        System.err.println("filterPossibleWordsNative 함수 호출 실패, Kotlin 구현으로 대체: ${e.message}")
+        
+        // 원래 Kotlin 구현을 폴백으로 사용
+        val filtered = ArrayList<String>()
+        
+        // 각 위치별 확정 글자 (상태 3)
+        val confirmedLetters = CharArray(6) { ' ' }
+        // 단어에 포함되어야 하는 글자들 (상태 2)
+        val mustInclude = HashMap<Char, Int>()
+        // 단어에 포함되지 않아야 하는 글자들 (상태 1)
+        val mustExclude = HashSet<Char>()
+        // 위치별 사용할 수 없는 글자 (상태 2 - 이 위치에는 올 수 없음)
+        val positionExclude = Array(6) { HashSet<Char>() }
+        
+        // 상태 정보 분석
+        for (i in 0 until 6) {
+            val char = guess[i]
+            when (states[i]) {
+                1 -> {
+                    // 다른 위치에 이 글자가 상태 2나 3으로 존재하는지 확인
+                    val existsElsewhere = (0 until 6).any { j -> j != i && (states[j] == 2 || states[j] == 3) && guess[j] == char }
+                    if (!existsElsewhere) {
+                        mustExclude.add(char)
+                    }
+                }
+                2 -> {
+                    // 글자는 단어에 있지만 이 위치는 아님
+                    positionExclude[i].add(char)
+                    mustInclude[char] = mustInclude.getOrDefault(char, 0) + 1
+                }
+                3 -> {
+                    // 글자가 정확한 위치에 있음
+                    confirmedLetters[i] = char
+                    mustInclude[char] = mustInclude.getOrDefault(char, 0) + 1
                 }
             }
-            2 -> {
-                // 글자는 단어에 있지만 이 위치는 아님
-                positionExclude[i].add(char)
-                mustInclude[char] = mustInclude.getOrDefault(char, 0) + 1
-            }
-            3 -> {
-                // 글자가 정확한 위치에 있음
-                confirmedLetters[i] = char
-                mustInclude[char] = mustInclude.getOrDefault(char, 0) + 1
-            }
         }
+        
+        // 필터링
+        for (word in words) {
+            var isValid = true
+            
+            // 확정 글자 검사
+            for (i in confirmedLetters.indices) {
+                if (confirmedLetters[i] != ' ' && word[i] != confirmedLetters[i]) {
+                    isValid = false
+                    break
+                }
+            }
+            if (!isValid) continue
+            
+            // 위치별 제외 글자 검사
+            for (i in 0 until 6) {
+                if (positionExclude[i].contains(word[i])) {
+                    isValid = false
+                    break
+                }
+            }
+            if (!isValid) continue
+            
+            // 포함/제외 글자 검사
+            val letterCount = HashMap<Char, Int>()
+            for (c in word) {
+                letterCount[c] = letterCount.getOrDefault(c, 0) + 1
+            }
+            
+            for ((char, count) in mustInclude) {
+                if (letterCount.getOrDefault(char, 0) < count) {
+                    isValid = false
+                    break
+                }
+            }
+            if (!isValid) continue
+            
+            for (char in mustExclude) {
+                if (letterCount.getOrDefault(char, 0) > 0) {
+                    isValid = false
+                    break
+                }
+            }
+            if (!isValid) continue
+            
+            filtered.add(word)
+        }
+        
+        return filtered
     }
-    
-    // 필터링
-    for (word in words) {
-        var isValid = true
-        
-        // 확정 글자 검사
-        for (i in confirmedLetters.indices) {
-            if (confirmedLetters[i] != ' ' && word[i] != confirmedLetters[i]) {
-                isValid = false
-                break
-            }
-        }
-        if (!isValid) continue
-        
-        // 위치별 제외 글자 검사
-        for (i in 0 until 6) {
-            if (positionExclude[i].contains(word[i])) {
-                isValid = false
-                break
-            }
-        }
-        if (!isValid) continue
-        
-        // 포함/제외 글자 검사
-        val letterCount = HashMap<Char, Int>()
-        for (c in word) {
-            letterCount[c] = letterCount.getOrDefault(c, 0) + 1
-        }
-        
-        for ((char, count) in mustInclude) {
-            if (letterCount.getOrDefault(char, 0) < count) {
-                isValid = false
-                break
-            }
-        }
-        if (!isValid) continue
-        
-        for (char in mustExclude) {
-            if (letterCount.getOrDefault(char, 0) > 0) {
-                isValid = false
-                break
-            }
-        }
-        if (!isValid) continue
-        
-        filtered.add(word)
-    }
-    
-    return filtered
 }
 
 // 다음 추측을 위한 단어 선택
@@ -389,3 +602,4 @@ fun scoreWord(word: String, possibleWords: ArrayList<String>): Int {
         return score
     }
 }
+
