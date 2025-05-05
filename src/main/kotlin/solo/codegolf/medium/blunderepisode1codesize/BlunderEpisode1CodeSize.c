@@ -4,7 +4,7 @@
 #include <stdbool.h>
 
 #define MAX_SIZE 100
-#define MAX_MOVES 1000000
+#define MAX_MOVES 100000  // 메모리 사용량 감소
 
 typedef struct {
     int x, y;
@@ -75,91 +75,74 @@ int getNextDir(Game* game) {
     return game->dir;  // Shouldn't happen with valid maps
 }
 
+// 수정된 루프 검출 함수 - 주변 X 벽 체크 로직 제거
 bool isLoop(Game* game) {
-    // 현재 상태가 이전에 방문한 상태와 정확히 일치하는지 확인
-    if (game->visited[game->pos.y][game->pos.x][game->dir][game->breakerMode][game->invertedPriorities]) {
-        // 추가적으로 주변 상태도 확인
-        for (int d = 0; d < 4; d++) {
-            int nx = game->pos.x + dx[d];
-            int ny = game->pos.y + dy[d];
-            if (nx >= 0 && nx < game->C && ny >= 0 && ny < game->L) {
-                if (game->grid[ny][nx] == 'X' && game->breakerMode) {
-                    return false;  // 부술 수 있는 벽이 있다면 아직 루프가 아님
-                }
-            }
-        }
-        return true;
-    }
-    return false;
+    return game->visited[game->pos.y][game->pos.x][game->dir][game->breakerMode][game->invertedPriorities];
 }
 
 void markVisited(Game* game) {
     game->visited[game->pos.y][game->pos.x][game->dir][game->breakerMode][game->invertedPriorities] = true;
 }
 
+// 텔레포터 처리 로직 수정
 void handleCell(Game* game) {
     char cell = game->grid[game->pos.y][game->pos.x];
     
-    // 방향 변경자 처리
-    if (cell == 'S' || cell == 'E' || cell == 'N' || cell == 'W') {
-        game->dir = (cell == 'S') ? 0 : (cell == 'E') ? 1 : (cell == 'N') ? 2 : 3;
-        return;
-    }
+    // 방향 지시자 처리 - return 제거하여 다른 기능도 함께 처리되도록 함
+    if (cell == 'S') game->dir = 0;
+    else if (cell == 'E') game->dir = 1;
+    else if (cell == 'N') game->dir = 2;
+    else if (cell == 'W') game->dir = 3;
 
-    switch(cell) {
-        case 'I': 
-            game->invertedPriorities = !game->invertedPriorities; 
-            break;
-        case 'B': 
-            game->breakerMode = !game->breakerMode; 
-            break;
-        case 'X':
-            if (game->breakerMode) {
-                game->grid[game->pos.y][game->pos.x] = ' ';
-            }
-            break;
-        case 'T':
-            if (game->teleCount == 2) {
-                Point temp = game->pos;
-                if (temp.x == game->teleporters[0].x && temp.y == game->teleporters[0].y) {
-                    game->pos = game->teleporters[1];
-                } else {
-                    game->pos = game->teleporters[0];
-                }
-            }
-            break;
+    // 다른 특수 기능 처리
+    if (cell == 'I') {
+        game->invertedPriorities = !game->invertedPriorities;
+    } 
+    else if (cell == 'B') {
+        game->breakerMode = !game->breakerMode;
+    } 
+    else if (cell == 'X' && game->breakerMode) {
+        game->grid[game->pos.y][game->pos.x] = ' ';
+    } 
+    else if (cell == 'T' && game->teleCount == 2) {
+        // 텔레포터 로직 단순화 - 항상 2개만 있다고 가정
+        if (game->pos.x == game->teleporters[0].x && game->pos.y == game->teleporters[0].y) {
+            game->pos = game->teleporters[1];
+        } else {
+            game->pos = game->teleporters[0];
+        }
     }
 }
 
 bool runSimulation(Game* game) {
-    int loopPrevention = 0;
-    while (loopPrevention++ < MAX_MOVES) {
+    while (game->moveCount < MAX_MOVES) {
+        // 현재 방향으로 이동할 수 없으면 다음 우선순위 방향 선택
         if (!canMove(game, game->dir)) {
-            int newDir = getNextDir(game);
-            if (newDir == game->dir) {
-                return false;
-            }
-            game->dir = newDir;
+            game->dir = getNextDir(game);
         }
 
+        // 루프 검출
         if (isLoop(game)) {
             return false;
         }
 
         markVisited(game);
-
         strcpy(game->moves[game->moveCount++], directions[game->dir]);
+        
+        // 이동
         game->pos.x += dx[game->dir];
         game->pos.y += dy[game->dir];
 
+        // 종료 지점 도달 체크
         if (game->grid[game->pos.y][game->pos.x] == '$') {
             return true;
         }
 
+        // 현재 위치의 셀 처리
         handleCell(game);
     }
 
-    return false;
+    return false; // MAX_MOVES에 도달하면 무한루프로 간주
 }
 
 int main() {
