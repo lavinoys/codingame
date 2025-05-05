@@ -105,35 +105,51 @@ void markVisited(Game* game) {
 
 bool runSimulation(Game* game) {
     while (true) {
-        // Check for loop
-        if (isLoop(game)) {
-            return false;
-        }
+        // 현재 상태 기록 (이동 전)
         markVisited(game);
 
-        // Try to move in current direction
+        // 현재 방향으로 이동 시도
         if (canMove(game, game->dir)) {
-            // Record move
+            // 이동 기록
             strcpy(game->moves[game->moveCount++], directions[game->dir]);
 
-            // Move
+            // 이동
             game->pos.x += dx[game->dir];
             game->pos.y += dy[game->dir];
 
-            // Check for finish
+            // 종료 지점 확인
             if (game->grid[game->pos.y][game->pos.x] == '$') {
                 return true;
             }
 
-            // Handle special cell effects
+            // 특수 셀 효과 처리
             handleCell(game);
+
+            // 루프 확인 - 이동 후에 체크
+            if (isLoop(game)) {
+                return false;
+            }
         } else {
-            // Find new direction using priorities
-            game->dir = getNextDir(game);
+            // 우선순위에 따른 새 방향 찾기
+            int newDir = getNextDir(game);
+
+            // 방향이 변경되면 루프 체크 필요
+            if (newDir != game->dir) {
+                game->dir = newDir;
+
+                // 방향 변경 후 방문 기록 및 루프 확인
+                if (isLoop(game)) {
+                    return false;
+                }
+                markVisited(game);
+            } else {
+                // 유효한 방향을 찾지 못했을 때 (맵 설계 오류)
+                return false;
+            }
         }
 
         if (game->moveCount >= MAX_MOVES) {
-            // Safety check to avoid infinite loops
+            // 무한 루프 방지 안전장치
             return false;
         }
     }
