@@ -14,10 +14,10 @@ int main()
     int n;
     scanf("%d", &n);
 
-    // Write an answer using printf(). DON'T FORGET THE TRAILING \n
-    // To debug: fprintf(stderr, "Debug messages...\n");
+    // 첫 n개의 홀수의 합은 n²와 같습니다
+    long long result = (long long)n * n;
 
-    printf("answer\n");
+    printf("%lld\n", result);
 
     return 0;
 }
