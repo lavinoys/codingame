@@ -20,19 +20,19 @@ val lastState = IntArray(WORD_LENGTH)
 var turnCount = 0
 
 // 단어가 주어진 상태 정보와 일치하는지 확인
-inline fun matchesConstraints(word: CharArray): Boolean {
+fun matchesConstraints(word: CharArray): Boolean {
     // 첫 번째 추측이라면 모든 단어가 가능함
     if (turnCount == 0) {
         return true
     }
-    
+
     // 1. 상태 3(정확한 위치)부터 검사
     for (i in 0 until WORD_LENGTH) {
         if (lastState[i] == 3 && word[i] != lastGuess[i]) {
             return false  // 정확한 위치에 맞는 글자가 없으면 제외
         }
     }
-    
+
     // 2. 상태 2(다른 위치에 있음) 검사
     for (i in 0 until WORD_LENGTH) {
         if (lastState[i] == 2) {
@@ -40,7 +40,7 @@ inline fun matchesConstraints(word: CharArray): Boolean {
             if (word[i] == lastGuess[i]) {
                 return false
             }
-            
+
             // 단어에 해당 글자가 있는지 확인
             var found = false
             for (j in 0 until WORD_LENGTH) {
@@ -49,18 +49,18 @@ inline fun matchesConstraints(word: CharArray): Boolean {
                     break
                 }
             }
-            
+
             if (!found) {
                 return false  // 해당 글자가 단어에 없으면 제외
             }
         }
     }
-    
+
     // 3. 상태 1(단어에 없음) 검사 - 글자 개수 고려
     for (i in 0 until WORD_LENGTH) {
         if (lastState[i] == 1) {
             val c = lastGuess[i]
-            
+
             // 같은 글자가 상태 2나 3으로 있는지 확인
             var expectedCount = 0
             for (j in 0 until WORD_LENGTH) {
@@ -68,7 +68,7 @@ inline fun matchesConstraints(word: CharArray): Boolean {
                     expectedCount++
                 }
             }
-            
+
             // 실제 단어에서 해당 글자의 개수 확인
             var actualCount = 0
             for (j in 0 until WORD_LENGTH) {
@@ -76,7 +76,7 @@ inline fun matchesConstraints(word: CharArray): Boolean {
                     actualCount++
                 }
             }
-            
+
             // 글자가 없어야 하거나(expectedCount=0), 정확히 expectedCount만큼만 있어야 함
             if (expectedCount == 0 && actualCount > 0) {
                 return false
@@ -85,14 +85,14 @@ inline fun matchesConstraints(word: CharArray): Boolean {
             }
         }
     }
-    
+
     return true
 }
 
 // 가능한 단어 목록 업데이트
 fun updatePossibleWords() {
     var newCount = 0
-    
+
     for (i in 0 until possibleCount) {
         if (matchesConstraints(possibleWords[i])) {
             // 그대로 유지하고 인덱스 이동
@@ -102,10 +102,10 @@ fun updatePossibleWords() {
             newCount++
         }
     }
-    
+
     possibleCount = newCount
     System.err.println("남은 가능한 단어: ${possibleCount}개")
-    
+
     // 디버깅: 일부 가능한 단어 출력 (최대 5개)
     val debugCount = minOf(possibleCount, 5)
     for (i in 0 until debugCount) {
@@ -114,10 +114,10 @@ fun updatePossibleWords() {
 }
 
 // 단어에서 각 글자의 정보 획득 가치 계산
-inline fun calculateWordValue(word: CharArray): Double {
+fun calculateWordValue(word: CharArray): Double {
     // 간단한 휴리스틱: 남은 가능한 단어에 있는 글자의 빈도수를 기준으로 점수 계산
     val letterCount = IntArray(26)
-    
+
     // 남은 가능한 단어들에서 각 글자의 빈도수 계산
     for (i in 0 until possibleCount) {
         val used = BooleanArray(26)
@@ -129,11 +129,11 @@ inline fun calculateWordValue(word: CharArray): Double {
             }
         }
     }
-    
+
     // 단어의 가치 계산: 단어에 있는 독특한 글자의 빈도 합
     var value = 0.0
     val used = BooleanArray(26)
-    
+
     for (i in 0 until WORD_LENGTH) {
         val idx = word[i] - 'A'
         if (!used[idx]) {
@@ -141,7 +141,7 @@ inline fun calculateWordValue(word: CharArray): Double {
             used[idx] = true
         }
     }
-    
+
     return value
 }
 
@@ -152,26 +152,26 @@ fun chooseGuess(guess: CharArray) {
         "FAULTS".toCharArray().copyInto(guess)
         return
     }
-    
+
     // 가능한 단어가 1개만 남았으면 그 단어 선택
     if (possibleCount == 1) {
         possibleWords[0].copyInto(guess)
         return
     }
-    
+
     // 가능한 단어가 2개만 남았으면 첫 번째 선택
     if (possibleCount == 2) {
         possibleWords[0].copyInto(guess)
         return
     }
-    
+
     // 정보 획득이 최대인 단어 선택
     var bestValue = -1.0
     var bestIndex = 0
-    
+
     // 가능한 단어 중 일부만 평가 (시간 제한 고려)
     val evalLimit = minOf(possibleCount, 1000)
-    
+
     for (i in 0 until evalLimit) {
         val value = calculateWordValue(possibleWords[i])
         if (value > bestValue) {
@@ -179,7 +179,7 @@ fun chooseGuess(guess: CharArray) {
             bestIndex = i
         }
     }
-    
+
     possibleWords[bestIndex].copyInto(guess)
 }
 
@@ -187,7 +187,7 @@ fun main() {
     val input = Scanner(System.`in`)
     val wordCount = input.nextInt()
     totalWordCount = wordCount
-    
+
     for (i in 0 until wordCount) {
         val word = input.next()
         for (j in word.indices) {
@@ -198,7 +198,7 @@ fun main() {
         wordSet[i][word.length] = '\u0000'
         possibleWords[i][word.length] = '\u0000'
     }
-    
+
     possibleCount = wordCount
     for (i in lastGuess.indices) {
         lastGuess[i] = '\u0000'
