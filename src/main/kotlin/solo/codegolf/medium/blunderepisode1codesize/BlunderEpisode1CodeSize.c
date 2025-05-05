@@ -134,25 +134,30 @@ void handleCell(Game* game) {
     if (DEBUG_MODE) {
         fprintf(stderr, "현재 위치 (%d,%d)의 셀: '%c' 처리\n", 
                 game->pos.x, game->pos.y, cell);
+        fprintf(stderr, "처리 전 상태 - 방향: %s, 파괴모드: %s, 우선순위반전: %s\n",
+                directions[game->dir],
+                game->breakerMode ? "활성" : "비활성",
+                game->invertedPriorities ? "활성" : "비활성");
     }
 
+    // 방향 변경 우선 처리
+    if (cell == 'S' || cell == 'E' || cell == 'N' || cell == 'W') {
+        int prevDir = game->dir;
+        switch(cell) {
+            case 'S': game->dir = 0; break;
+            case 'E': game->dir = 1; break;
+            case 'N': game->dir = 2; break;
+            case 'W': game->dir = 3; break;
+        }
+        if (DEBUG_MODE && prevDir != game->dir) {
+            fprintf(stderr, "  강제 방향 변경: %s → %s\n", 
+                    directions[prevDir], directions[game->dir]);
+        }
+        return; // 방향 변경 후 다른 효과 무시
+    }
+
+    // 다른 특수 효과 처리
     switch(cell) {
-        case 'S': 
-            game->dir = 0; 
-            if (DEBUG_MODE) fprintf(stderr, "  방향 변경: SOUTH\n");
-            break;
-        case 'E': 
-            game->dir = 1; 
-            if (DEBUG_MODE) fprintf(stderr, "  방향 변경: EAST\n");
-            break;
-        case 'N': 
-            game->dir = 2; 
-            if (DEBUG_MODE) fprintf(stderr, "  방향 변경: NORTH\n");
-            break;
-        case 'W': 
-            game->dir = 3; 
-            if (DEBUG_MODE) fprintf(stderr, "  방향 변경: WEST\n");
-            break;
         case 'I': 
             game->invertedPriorities = !game->invertedPriorities; 
             if (DEBUG_MODE) fprintf(stderr, "  우선순위 반전: %s\n", 
@@ -165,22 +170,29 @@ void handleCell(Game* game) {
             break;
         case 'X':
             if (game->breakerMode) {
-                game->grid[game->pos.y][game->pos.x] = ' ';  // Destroy X
+                game->grid[game->pos.y][game->pos.x] = ' ';
                 if (DEBUG_MODE) fprintf(stderr, "  장애물 X 파괴!\n");
             }
             break;
         case 'T':
-            // Teleport to the other T
             for (int i = 0; i < game->teleCount; i++) {
-                if (game->teleporters[i].x != game->pos.x || game->teleporters[i].y != game->pos.y) {
-                    int oldX = game->pos.x, oldY = game->pos.y;
+                if (game->teleporters[i].x != game->pos.x || 
+                    game->teleporters[i].y != game->pos.y) {
+                    Point oldPos = game->pos;
                     game->pos = game->teleporters[i];
                     if (DEBUG_MODE) fprintf(stderr, "  텔레포트: (%d,%d) → (%d,%d)\n", 
-                                          oldX, oldY, game->pos.x, game->pos.y);
+                                          oldPos.x, oldPos.y, game->pos.x, game->pos.y);
                     break;
                 }
             }
             break;
+    }
+
+    if (DEBUG_MODE) {
+        fprintf(stderr, "처리 후 상태 - 방향: %s, 파괴모드: %s, 우선순위반전: %s\n",
+                directions[game->dir],
+                game->breakerMode ? "활성" : "비활성",
+                game->invertedPriorities ? "활성" : "비활성");
     }
 }
 
@@ -191,6 +203,9 @@ bool isLoop(Game* game) {
                 game->pos.x, game->pos.y, directions[game->dir],
                 game->breakerMode ? "활성" : "비활성",
                 game->invertedPriorities ? "활성" : "비활성");
+        
+        // 루프 감지 시 추가 정보 출력
+        fprintf(stderr, "이전에 같은 상태로 방문한 적 있음 (루프 발생)\n");
     }
     return result;
 }
@@ -211,76 +226,57 @@ bool runSimulation(Game* game) {
         debugPrintGrid(game);
     }
 
-    while (true) {
-        // 현재 상태 기록 (이동 전)
-        markVisited(game);
-
-        // 현재 방향으로 이동 시도
-        if (canMove(game, game->dir)) {
-            // 이동 기록
-            strcpy(game->moves[game->moveCount++], directions[game->dir]);
-            if (DEBUG_MODE) {
-                fprintf(stderr, "이동 #%d: %s\n", game->moveCount, directions[game->dir]);
-            }
-
-            // 이동
-            game->pos.x += dx[game->dir];
-            game->pos.y += dy[game->dir];
-
-            if (DEBUG_MODE) {
-                fprintf(stderr, "새 위치: (%d,%d)\n", game->pos.x, game->pos.y);
-            }
-
-            // 종료 지점 확인
-            if (game->grid[game->pos.y][game->pos.x] == '$') {
-                if (DEBUG_MODE) {
-                    fprintf(stderr, "종료 지점($) 도달! 이동 횟수: %d\n", game->moveCount);
-                }
-                return true;
-            }
-
-            // 특수 셀 효과 처리
-            handleCell(game);
-
-            // 루프 확인 - 이동 후에 체크
-            if (isLoop(game)) {
-                return false;
-            }
-
-            if (DEBUG_MODE) debugPrintGrid(game);
-        } else {
-            // 우선순위에 따른 새 방향 찾기
+    int loopPrevention = 0;
+    while (loopPrevention++ < MAX_MOVES) {
+        // 현재 상태에서 이동 가능 체크
+        if (!canMove(game, game->dir)) {
             int newDir = getNextDir(game);
-
-            // 방향이 변경되면 루프 체크 필요
-            if (newDir != game->dir) {
-                game->dir = newDir;
-                if (DEBUG_MODE) {
-                    fprintf(stderr, "방향 변경: %s\n", directions[game->dir]);
-                }
-
-                // 방향 변경 후 방문 기록 및 루프 확인
-                if (isLoop(game)) {
-                    return false;
-                }
-                markVisited(game);
-            } else {
-                // 유효한 방향을 찾지 못했을 때 (맵 설계 오류)
-                if (DEBUG_MODE) {
-                    fprintf(stderr, "오류: 이동 가능한 방향이 없음!\n");
-                }
+            if (newDir == game->dir) {
+                if (DEBUG_MODE) fprintf(stderr, "이동 불가능한 상태!\n");
                 return false;
             }
+            game->dir = newDir;
         }
 
-        if (game->moveCount >= MAX_MOVES) {
-            // 무한 루프 방지 안전장치
+        // 현재 상태가 이미 방문했던 상태인지 체크
+        if (isLoop(game)) {
             if (DEBUG_MODE) {
-                fprintf(stderr, "최대 이동 횟수(%d)에 도달! 루프로 간주\n", MAX_MOVES);
+                fprintf(stderr, "루프 상태 감지! (%d,%d) 방향:%s\n", 
+                        game->pos.x, game->pos.y, directions[game->dir]);
+                fprintf(stderr, "파괴모드:%s 우선순위반전:%s\n",
+                        game->breakerMode ? "활성" : "비활성",
+                        game->invertedPriorities ? "활성" : "비활성");
             }
             return false;
         }
+
+        // 현재 상태 방문 기록
+        markVisited(game);
+
+        // 이동 실행
+        strcpy(game->moves[game->moveCount++], directions[game->dir]);
+        game->pos.x += dx[game->dir];
+        game->pos.y += dy[game->dir];
+
+        if (DEBUG_MODE) {
+            fprintf(stderr, "\n이동 #%d: %s → (%d,%d)\n", 
+                    game->moveCount, directions[game->dir], game->pos.x, game->pos.y);
+        }
+
+        // 목표 도달 체크
+        if (game->grid[game->pos.y][game->pos.x] == '$') {
+            if (DEBUG_MODE) fprintf(stderr, "목표 도달! 이동 횟수: %d\n", game->moveCount);
+            return true;
+        }
+
+        // 특수 셀 효과 처리
+        handleCell(game);
+
+        if (DEBUG_MODE) debugPrintGrid(game);
     }
+
+    if (DEBUG_MODE) fprintf(stderr, "최대 이동 횟수 초과!\n");
+    return false;
 }
 
 int main() {
