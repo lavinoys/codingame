@@ -102,3 +102,197 @@ WEST
 WEST
 SOUTH
 SOUTH
+
+### input
+
+30 15
+###############
+#  #@#I  T$#  #
+#  #    IB #  #
+#  #     W #  #
+#  #      ##  #
+#  #B XBN# #  #
+#  ##      #  #
+#  #       #  #
+#  #     W #  #
+#  #      ##  #
+#  #B XBN# #  #
+#  ##      #  #
+#  #       #  #
+#  #     W #  #
+#  #      ##  #
+#  #B XBN# #  #
+#  ##      #  #
+#  #       #  #
+#  #       #  #
+#  #      ##  #
+#  #  XBIT #  #
+#  #########  #
+#             #
+# ##### ##### #
+# #     #     #
+# #     #  ## #
+# #     #   # #
+# ##### ##### #
+#             #
+###############
+
+### Output
+
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+EAST
+EAST
+EAST
+EAST
+NORTH
+NORTH
+NORTH
+NORTH
+WEST
+WEST
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+EAST
+EAST
+EAST
+NORTH
+WEST
+WEST
+WEST
+WEST
+WEST
+SOUTH
+SOUTH
+EAST
+EAST
+EAST
+EAST
+NORTH
+NORTH
+NORTH
+NORTH
+NORTH
+NORTH
+NORTH
+NORTH
+NORTH
+WEST
+WEST
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+EAST
+EAST
+EAST
+NORTH
+WEST
+WEST
+WEST
+WEST
+WEST
+SOUTH
+SOUTH
+EAST
+EAST
+EAST
+EAST
+NORTH
+NORTH
+NORTH
+NORTH
+NORTH
+NORTH
+NORTH
+NORTH
+NORTH
+NORTH
+NORTH
+NORTH
+NORTH
+NORTH
+WEST
+WEST
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+EAST
+EAST
+EAST
+SOUTH
+SOUTH
+SOUTH
+WEST
+WEST
+WEST
+WEST
+WEST
+SOUTH
+SOUTH
+EAST
+EAST
+EAST
+EAST
+NORTH
+NORTH
+NORTH
+NORTH
+WEST
+WEST
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+SOUTH
+EAST
+EAST
+EAST
+EAST
+
