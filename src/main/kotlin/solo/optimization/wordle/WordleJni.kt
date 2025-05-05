@@ -1,9 +1,210 @@
 import java.util.*
+import java.io.File
 
 /**
  * Made by Tanvir
  **/
+
+// JNI를 통해 C 함수를 호출하기 위한 외부 함수 선언
+private external fun scoreWordNative(
+    word: String, 
+    possibleWords: Array<String>, 
+    possibleWordsSize: Int
+): Int
+
+// C 코드 컴파일 및 로드를 처리하는 객체
+object NativeHelper {
+    private var nativeLibraryLoaded = false
+
+    fun loadNativeLibrary(): Boolean {
+        if (nativeLibraryLoaded) return true
+        
+        try {
+            val tempDir = createTempDir("wordle_jni")
+            val cCode = """
+#include <jni.h>
+#include <string.h>
+#include <stdlib.h>
+
+// HashMap 구현을 위한 구조체 및 함수
+typedef struct {
+    char key;
+    int value;
+} KeyValue;
+
+typedef struct {
+    KeyValue* entries;
+    int size;
+    int capacity;
+} HashMap;
+
+HashMap* createHashMap(int capacity) {
+    HashMap* map = (HashMap*)malloc(sizeof(HashMap));
+    map->entries = (KeyValue*)malloc(sizeof(KeyValue) * capacity);
+    map->size = 0;
+    map->capacity = capacity;
+    return map;
+}
+
+void freeHashMap(HashMap* map) {
+    free(map->entries);
+    free(map);
+}
+
+void put(HashMap* map, char key, int value) {
+    // 기존 키가 있는지 확인
+    for (int i = 0; i < map->size; i++) {
+        if (map->entries[i].key == key) {
+            map->entries[i].value = value;
+            return;
+        }
+    }
+    
+    // 새 키-값 쌍 추가
+    if (map->size < map->capacity) {
+        map->entries[map->size].key = key;
+        map->entries[map->size].value = value;
+        map->size++;
+    }
+}
+
+int get(HashMap* map, char key, int defaultValue) {
+    for (int i = 0; i < map->size; i++) {
+        if (map->entries[i].key == key) {
+            return map->entries[i].value;
+        }
+    }
+    return defaultValue;
+}
+
+// HashSet 구현을 위한 구조체 및 함수
+typedef struct {
+    char* elements;
+    int size;
+    int capacity;
+} HashSet;
+
+HashSet* createHashSet(int capacity) {
+    HashSet* set = (HashSet*)malloc(sizeof(HashSet));
+    set->elements = (char*)malloc(sizeof(char) * capacity);
+    set->size = 0;
+    set->capacity = capacity;
+    return set;
+}
+
+void freeHashSet(HashSet* set) {
+    free(set->elements);
+    free(set);
+}
+
+int add(HashSet* set, char element) {
+    // 이미 존재하는지 확인
+    for (int i = 0; i < set->size; i++) {
+        if (set->elements[i] == element) {
+            return 0; // 이미 존재함
+        }
+    }
+    
+    // 새 요소 추가
+    if (set->size < set->capacity) {
+        set->elements[set->size] = element;
+        set->size++;
+        return 1; // 성공적으로 추가됨
+    }
+    return 0; // 용량 부족
+}
+
+// Kotlin scoreWord 함수의 C 구현
+JNIEXPORT jint JNICALL Java_solo_optimization_wordle_WordleJniKt_scoreWordNative(
+    JNIEnv* env, 
+    jclass cls, 
+    jstring word, 
+    jobjectArray possibleWords, 
+    jint possibleWordsSize
+) {
+    const char* wordStr = (*env)->GetStringUTFChars(env, word, NULL);
+    int wordLen = (*env)->GetStringUTFLength(env, word);
+    
+    // 글자 빈도수 계산
+    HashMap* letterFrequency = createHashMap(26); // 알파벳 개수
+    
+    for (int i = 0; i < possibleWordsSize; i++) {
+        jstring possibleWord = (jstring)(*env)->GetObjectArrayElement(env, possibleWords, i);
+        const char* possibleWordStr = (*env)->GetStringUTFChars(env, possibleWord, NULL);
+        int possibleWordLen = (*env)->GetStringUTFLength(env, possibleWord);
+        
+        for (int j = 0; j < possibleWordLen; j++) {
+            char c = possibleWordStr[j];
+            int current = get(letterFrequency, c, 0);
+            put(letterFrequency, c, current + 1);
+        }
+        
+        (*env)->ReleaseStringUTFChars(env, possibleWord, possibleWordStr);
+        (*env)->DeleteLocalRef(env, possibleWord);
+    }
+    
+    // 중복되지 않은 글자에 대한 점수 부여
+    HashSet* uniqueLetters = createHashSet(26);
+    int score = 0;
+    
+    for (int i = 0; i < wordLen; i++) {
+        char c = wordStr[i];
+        if (add(uniqueLetters, c)) {
+            score += get(letterFrequency, c, 0);
+        } else {
+            // 중복 글자는 점수를 낮춤
+            score -= get(letterFrequency, c, 0) / 2;
+        }
+    }
+    
+    (*env)->ReleaseStringUTFChars(env, word, wordStr);
+    freeHashMap(letterFrequency);
+    freeHashSet(uniqueLetters);
+    
+    return score;
+}
+"""
+            
+            val cFile = File(tempDir, "WordleJni.c")
+            cFile.writeText(cCode)
+            
+            // 운영체제에 맞는 컴파일 명령어 실행
+            val osName = System.getProperty("os.name").lowercase()
+            val libName = if (osName.contains("win")) "WordleJni.dll" else "libWordleJni.so"
+            val javaHome = System.getProperty("java.home")
+            
+            val compileCommand = if (osName.contains("win")) {
+                "gcc -shared -o ${tempDir.absolutePath}/$libName ${cFile.absolutePath} -I\"$javaHome\\include\" -I\"$javaHome\\include\\win32\""
+            } else {
+                "gcc -shared -fPIC -o ${tempDir.absolutePath}/$libName ${cFile.absolutePath} -I$javaHome/include -I$javaHome/include/linux"
+            }
+            
+            val process = Runtime.getRuntime().exec(compileCommand)
+            process.waitFor()
+            
+            if (process.exitValue() != 0) {
+                val error = process.errorStream.bufferedReader().readText()
+                System.err.println("C 코드 컴파일 실패: $error")
+                return false
+            }
+            
+            // 컴파일된 라이브러리 로드
+            System.load(File(tempDir, libName).absolutePath)
+            nativeLibraryLoaded = true
+            return true
+            
+        } catch (e: Exception) {
+            System.err.println("네이티브 라이브러리 로드 실패: ${e.message}")
+            e.printStackTrace()
+            return false
+        }
+    }
+}
+
 fun main() {
+    // 네이티브 라이브러리 로드 시도
+    NativeHelper.loadNativeLibrary()
+    
     val input = Scanner(System.`in`)
     val wordCount = input.nextInt() // Number of words in the word set
     
@@ -160,26 +361,31 @@ fun chooseNextGuess(possibleWords: ArrayList<String>): String {
 
 // 단어의 점수 계산 (높은 정보 획득 가능성 의미)
 fun scoreWord(word: String, possibleWords: ArrayList<String>): Int {
-    // 글자 빈도수 계산 (가장 흔한 글자가 포함된 단어가 좋음)
-    val letterFrequency = HashMap<Char, Int>()
-    for (w in possibleWords) {
-        for (c in w) {
-            letterFrequency[c] = letterFrequency.getOrDefault(c, 0) + 1
+    try {
+        // JNI를 통한 네이티브 구현 호출 시도
+        return scoreWordNative(word, possibleWords.toTypedArray(), possibleWords.size)
+    } catch (e: UnsatisfiedLinkError) {
+        System.err.println("네이티브 함수 호출 실패, Kotlin 구현으로 대체: ${e.message}")
+        
+        // 원래 Kotlin 구현을 폴백으로 사용
+        val letterFrequency = HashMap<Char, Int>()
+        for (w in possibleWords) {
+            for (c in w) {
+                letterFrequency[c] = letterFrequency.getOrDefault(c, 0) + 1
+            }
         }
-    }
-    
-    // 중복되지 않은 글자에 대한 점수 부여
-    val uniqueLetters = HashSet<Char>()
-    var score = 0
-    
-    for (c in word) {
-        if (uniqueLetters.add(c)) {
-            score += letterFrequency.getOrDefault(c, 0)
-        } else {
-            // 중복 글자는 점수를 낮춤
-            score -= letterFrequency.getOrDefault(c, 0) / 2
+        
+        val uniqueLetters = HashSet<Char>()
+        var score = 0
+        
+        for (c in word) {
+            if (uniqueLetters.add(c)) {
+                score += letterFrequency.getOrDefault(c, 0)
+            } else {
+                score -= letterFrequency.getOrDefault(c, 0) / 2
+            }
         }
+        
+        return score
     }
-    
-    return score
 }
