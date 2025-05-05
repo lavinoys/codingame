@@ -2,191 +2,208 @@ import java.util.*
 
 /**
  * Made by Tanvir
- * Kotlin conversion
+ * Kotlin conversion with optimizations
  */
+
+// 글자 상태를 나타내는 열거형
+enum class LetterState(val value: Int) {
+    UNKNOWN(0),      // 초기 상태
+    NOT_PRESENT(1),  // 단어에 없음
+    WRONG_POSITION(2), // 단어에 있지만 위치가 잘못됨
+    CORRECT_POSITION(3); // 정확한 위치에 있음
+    
+    companion object {
+        fun fromValue(value: Int): LetterState = values().first { it.value == value }
+    }
+}
 
 class WordleSolver {
     companion object {
-        const val MAX_WORDS = 15000
         const val WORD_LENGTH = 6
+        private const val FIRST_GUESS = "FAULTS" // 첫 추측 단어
     }
 
-    // 단어 목록 저장
-    private val wordSet = Array(MAX_WORDS) { "" }
-    private val possibleWords = Array(MAX_WORDS) { "" }
-    private var possibleCount = 0
-    private var totalWordCount = 0
+    // 단어 목록 저장 (동적 리스트 사용)
+    private val wordList = mutableListOf<String>()
+    private var possibleWords = mutableListOf<String>()
 
     // 이전 추측과 상태 기록
     private var lastGuess = ""
-    private val lastState = IntArray(WORD_LENGTH)
+    private val lastState = mutableListOf<LetterState>()
     private var turnCount = 0
 
-    // 글자 빈도수를 나타내는 데이터 클래스
-    data class LetterFreq(val letter: Char, val frequency: Int)
+    // 글자별 제약조건 저장 (성능 개선을 위한 캐싱)
+    private val letterConstraints = mutableMapOf<Char, LetterConstraint>()
+    
+    // 각 위치별로 확정된 글자 저장
+    private val positionConstraints = Array<Char?>(WORD_LENGTH) { null }
 
-    // 단어가 주어진 상태 정보와 일치하는지 확인
+    // 글자별 제약조건 관리 클래스
+    private data class LetterConstraint(
+        var minCount: Int = 0,             // 최소 등장 횟수
+        var maxCount: Int = WORD_LENGTH,   // 최대 등장 횟수
+        val forbiddenPositions: MutableSet<Int> = mutableSetOf() // 해당 글자가 있으면 안 되는 위치
+    )
+
+    // 단어가 주어진 제약조건과 일치하는지 확인
     private fun matchesConstraints(word: String): Boolean {
         // 첫 번째 추측이라면 모든 단어가 가능함
-        if (turnCount == 0) {
-            return true
+        if (turnCount == 0) return true
+        
+        // 1. 확정된 위치 검사
+        for (i in word.indices) {
+            positionConstraints[i]?.let { if (word[i] != it) return false }
         }
         
-        // 1. 상태 3(정확한 위치)부터 검사
-        for (i in 0 until WORD_LENGTH) {
-            if (lastState[i] == 3 && word[i] != lastGuess[i]) {
-                return false  // 정확한 위치에 맞는 글자가 없으면 제외
+        // 2. 글자별 제약조건 검사
+        val letterCounts = word.groupingBy { it }.eachCount()
+        
+        for ((letter, constraint) in letterConstraints) {
+            val count = letterCounts[letter] ?: 0
+            
+            // 최소/최대 개수 제약조건 검사
+            if (count < constraint.minCount || count > constraint.maxCount) {
+                return false
             }
-        }
-        
-        // 2. 상태 2(다른 위치에 있음) 검사
-        for (i in 0 until WORD_LENGTH) {
-            if (lastState[i] == 2) {
-                // 같은 위치에 같은 글자가 있으면 안됨
-                if (word[i] == lastGuess[i]) {
-                    return false
-                }
-                
-                // 단어에 해당 글자가 있는지 확인
-                if (!word.indices.any { j -> j != i && word[j] == lastGuess[i] }) {
-                    return false  // 해당 글자가 단어에 없으면 제외
-                }
-            }
-        }
-        
-        // 3. 상태 1(단어에 없음) 검사 - 글자 개수 고려
-        for (i in 0 until WORD_LENGTH) {
-            if (lastState[i] == 1) {
-                val c = lastGuess[i]
-                
-                // 같은 글자가 상태 2나 3으로 있는지 확인
-                val expectedCount = (0 until WORD_LENGTH).count { j -> 
-                    lastGuess[j] == c && (lastState[j] == 2 || lastState[j] == 3) 
-                }
-                
-                // 실제 단어에서 해당 글자의 개수 확인
-                val actualCount = word.count { it == c }
-                
-                // 글자가 없어야 하거나(expectedCount=0), 정확히 expectedCount만큼만 있어야 함
-                if (expectedCount == 0 && actualCount > 0) {
-                    return false
-                } else if (expectedCount > 0 && actualCount > expectedCount) {
-                    return false
-                }
+            
+            // 금지된 위치 검사
+            if (constraint.forbiddenPositions.any { pos -> word[pos] == letter }) {
+                return false
             }
         }
         
         return true
     }
 
-    // 가능한 단어 목록 업데이트
-    private fun updatePossibleWords() {
-        val newPossibleWords = mutableListOf<String>()
+    // 제약조건 업데이트
+    private fun updateConstraints() {
+        if (lastGuess.isEmpty() || lastState.isEmpty()) return
         
-        for (i in 0 until possibleCount) {
-            if (matchesConstraints(possibleWords[i])) {
-                newPossibleWords.add(possibleWords[i])
+        // 글자 개수 계산
+        val guessLetterCount = lastGuess.groupingBy { it }.eachCount()
+        val correctOrMisplaced = mutableMapOf<Char, Int>()
+        
+        // 첫 번째 패스: CORRECT_POSITION 처리
+        lastGuess.forEachIndexed { idx, char ->
+            when (lastState[idx]) {
+                LetterState.CORRECT_POSITION -> {
+                    positionConstraints[idx] = char
+                    correctOrMisplaced[char] = (correctOrMisplaced[char] ?: 0) + 1
+                    
+                    letterConstraints.getOrPut(char) { LetterConstraint() }.apply {
+                        minCount = maxOf(minCount, correctOrMisplaced[char] ?: 0)
+                    }
+                }
+                else -> {}
             }
         }
         
-        possibleCount = newPossibleWords.size
-        newPossibleWords.forEachIndexed { index, word ->
-            possibleWords[index] = word
+        // 두 번째 패스: WRONG_POSITION 처리
+        lastGuess.forEachIndexed { idx, char ->
+            when (lastState[idx]) {
+                LetterState.WRONG_POSITION -> {
+                    correctOrMisplaced[char] = (correctOrMisplaced[char] ?: 0) + 1
+                    
+                    letterConstraints.getOrPut(char) { LetterConstraint() }.apply {
+                        minCount = maxOf(minCount, correctOrMisplaced[char] ?: 0)
+                        forbiddenPositions.add(idx)
+                    }
+                }
+                else -> {}
+            }
         }
         
-        System.err.println("남은 가능한 단어: ${possibleCount}개")
-        
-        // 디버깅: 일부 가능한 단어 출력 (최대 5개)
-        val debugCount = minOf(possibleCount, 5)
-        for (i in 0 until debugCount) {
-            System.err.println("가능한 단어 #${i+1}: ${possibleWords[i]}")
+        // 세 번째 패스: NOT_PRESENT 처리
+        lastGuess.forEachIndexed { idx, char ->
+            when (lastState[idx]) {
+                LetterState.NOT_PRESENT -> {
+                    letterConstraints.getOrPut(char) { LetterConstraint() }.apply {
+                        // 다른 위치에서 발견된 동일 글자 개수가 최대 개수가 됨
+                        maxCount = correctOrMisplaced[char] ?: 0
+                        
+                        // 처음 나오는 없는 글자인 경우 maxCount를 0으로 설정
+                        if (correctOrMisplaced[char] == null) {
+                            maxCount = 0
+                        }
+                    }
+                }
+                else -> {}
+            }
         }
     }
 
-    // 단어에서 각 글자의 정보 획득 가치 계산
-    private fun calculateWordValue(word: String): Double {
-        // 간단한 휴리스틱: 남은 가능한 단어에 있는 글자의 빈도수를 기준으로 점수 계산
-        val letterCount = IntArray(26)
+    // 가능한 단어 목록 업데이트
+    private fun updatePossibleWords() {
+        updateConstraints()
+        possibleWords = possibleWords.filter { matchesConstraints(it) }.toMutableList()
         
-        // 남은 가능한 단어들에서 각 글자의 빈도수 계산
-        for (i in 0 until possibleCount) {
-            val used = BooleanArray(26)
-            for (j in 0 until WORD_LENGTH) {
-                val idx = possibleWords[i][j] - 'A'
-                if (!used[idx]) {
-                    letterCount[idx]++
-                    used[idx] = true
-                }
+        System.err.println("남은 가능한 단어: ${possibleWords.size}개")
+        
+        // 디버깅: 일부 가능한 단어 출력 (최대 5개)
+        possibleWords.take(5).forEachIndexed { index, word ->
+            System.err.println("가능한 단어 #${index+1}: $word")
+        }
+    }
+
+    // 단어의 정보 획득 가치 계산
+    private fun calculateInformationValue(word: String): Double {
+        // 이미 가능한 단어 목록에 있는 경우 우선 고려
+        if (word in possibleWords) return Double.MAX_VALUE - letterFrequencyValue(word)
+        
+        return letterFrequencyValue(word)
+    }
+    
+    // 글자 빈도 기반 가치 계산
+    private fun letterFrequencyValue(word: String): Double {
+        if (possibleWords.isEmpty()) return 0.0
+        
+        // 남은 가능한 단어에서 글자 빈도 계산
+        val letterFrequencies = mutableMapOf<Char, Int>()
+        
+        possibleWords.forEach { possibleWord ->
+            possibleWord.toSet().forEach { char -> 
+                letterFrequencies[char] = (letterFrequencies[char] ?: 0) + 1
             }
         }
         
-        // 단어의 가치 계산: 단어에 있는 독특한 글자의 빈도 합
-        var value = 0.0
-        val used = BooleanArray(26)
-        
-        for (i in 0 until WORD_LENGTH) {
-            val idx = word[i] - 'A'
-            if (!used[idx]) {
-                value += letterCount[idx].toDouble() / possibleCount
-                used[idx] = true
-            }
-        }
-        
-        return value
+        // 단어에서 고유 글자의 빈도 합산 (중복 글자는 한번만 계산)
+        return word.toSet().sumOf { letterFrequencies[it]?.toDouble() ?: 0.0 } / possibleWords.size
     }
 
     // 최적의 추측 단어 선택
     private fun chooseGuess(): String {
-        if (turnCount == 0) {
-            // 첫 단어는 정보 획득이 좋은 단어 선택
-            return "FAULTS"  // 많은 자음과 모음이 포함된 6글자 단어
-        }
+        // 첫 턴이면 고정된 시작 단어
+        if (turnCount == 0) return FIRST_GUESS
         
-        // 가능한 단어가 1개나 2개만 남았으면 첫 번째 선택
-        if (possibleCount <= 2) {
-            return possibleWords[0]
-        }
+        // 가능한 단어가 적으면 첫 번째 반환
+        if (possibleWords.size <= 2) return possibleWords.first()
         
-        // 정보 획득이 최대인 단어 선택
-        var bestValue = -1.0
-        var bestIndex = 0
-        
-        // 가능한 단어 중 일부만 평가 (시간 제한 고려)
-        val evalLimit = minOf(possibleCount, 1000)
-        
-        for (i in 0 until evalLimit) {
-            val value = calculateWordValue(possibleWords[i])
-            if (value > bestValue) {
-                bestValue = value
-                bestIndex = i
-            }
-        }
-        
-        return possibleWords[bestIndex]
+        // 정보 획득 가치가 가장 높은 단어 선택
+        return possibleWords
+            .asSequence()
+            .take(minOf(possibleWords.size, 500)) // 시간 제한을 고려하여 일부만 평가
+            .maxByOrNull { calculateInformationValue(it) }
+            ?: possibleWords.first()
     }
 
     fun solve() {
-        // 단어 수 입력 받기
         val scanner = Scanner(System.`in`)
         val wordCount = scanner.nextInt()
-        totalWordCount = wordCount
         
         // 단어 세트 로드
-        for (i in 0 until wordCount) {
+        repeat(wordCount) {
             val word = scanner.next()
-            wordSet[i] = word
-            possibleWords[i] = word  // 초기에는 모든 단어가 가능함
+            wordList.add(word)
         }
+        possibleWords = wordList.toMutableList()
         
-        possibleCount = wordCount
-        lastGuess = ""
-        turnCount = 0
-
         // 게임 루프
         while (true) {
-            // 이전 추측 결과 상태 입력 받기
-            for (i in 0 until WORD_LENGTH) {
-                lastState[i] = scanner.nextInt()
+            // 상태 정보 입력 받기
+            lastState.clear()
+            repeat(WORD_LENGTH) {
+                val state = scanner.nextInt()
+                lastState.add(LetterState.fromValue(state))
             }
 
             // 가능한 단어 목록 업데이트 (첫 턴이 아닌 경우)
@@ -194,16 +211,13 @@ class WordleSolver {
                 updatePossibleWords()
             }
 
-            // 다음 추측 선택
-            val guess = chooseGuess()
-            
-            // 추측 저장 및 출력
-            lastGuess = guess
-            println(guess)
-            System.out.flush() // 출력 버퍼 비우기
+            // 다음 추측 선택 및 출력
+            lastGuess = chooseGuess()
+            println(lastGuess)
+            System.out.flush()
             
             // 디버그 정보 출력
-            System.err.println("턴 ${turnCount + 1}: 추측 = $guess")
+            System.err.println("턴 ${turnCount + 1}: 추측 = $lastGuess")
             
             turnCount++
         }
@@ -211,6 +225,5 @@ class WordleSolver {
 }
 
 fun main() {
-    val solver = WordleSolver()
-    solver.solve()
+    WordleSolver().solve()
 }
