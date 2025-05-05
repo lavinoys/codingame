@@ -45,14 +45,30 @@ typedef struct {
     bool is_moving;
 } Pod;
 
+// 우주비행사 구조체
+typedef struct {
+    int id;
+    int type;                // 1-20: 우주비행사 타입
+    int current_building;    // 현재 위치한 건물
+    int target_module;       // 목적지 모듈
+    int pod_id;              // 할당된 포드 ID (-1: 미할당)
+    int arrival_day;         // 착륙한 날짜
+    bool arrived;            // 목적지 도착 여부
+} Astronaut;
+
 // 전역 변수
 Building buildings[MAX_BUILDINGS];
 Route routes[MAX_TUBES];
 Pod pods[MAX_PODS];
+Astronaut astronauts[MAX_ASTRONAUTS];
 int building_count = 0;
 int route_count = 0;
 int pod_count = 0;
+int astronaut_count = 0;
 int month = 0;
+int current_day = 0;
+int total_score = 0;
+int buildings_with_arrivals[MAX_BUILDINGS];  // 이번 달에 도착한 우주비행사 수 기록
 
 // 함수 선언
 double calculate_distance(int x1, int y1, int x2, int y2);
@@ -65,6 +81,11 @@ void parse_pod_properties(char* properties);
 void update_building_info(int id, int type, int x, int y);
 void execute_strategy(int resources);
 int find_building_index(int id);
+void simulate_astronaut_movement();
+int calculate_distance_to_target(int building_id, int target_type);
+void calculate_scores();
+void apply_interest(int* resources);
+void initialize_monthly_data();
 
 // 두 점 사이의 거리 계산
 double calculate_distance(int x1, int y1, int x2, int y2) {
@@ -260,6 +281,281 @@ void update_building_info(int id, int type, int x, int y) {
     
     for (int i = 0; i <= MODULE_TYPE_COUNT; i++) {
         building->astronaut_count[i] = 0;
+    }
+}
+
+// 건물 간의 최단 거리 계산 (BFS 알고리즘)
+int calculate_distance_to_target(int building_id, int target_type) {
+    int queue[MAX_BUILDINGS];
+    int distance[MAX_BUILDINGS];
+    bool visited[MAX_BUILDINGS];
+    int front = 0, rear = 0;
+    
+    // 초기화
+    for (int i = 0; i < building_count; i++) {
+        distance[i] = -1;
+        visited[i] = false;
+    }
+    
+    // 시작 건물 큐에 추가
+    int start_idx = find_building_index(building_id);
+    if (start_idx == -1) return -1;
+    
+    queue[rear++] = start_idx;
+    distance[start_idx] = 0;
+    visited[start_idx] = true;
+    
+    // BFS 탐색
+    while (front < rear) {
+        int current = queue[front++];
+        
+        // 타겟 타입 도달 확인
+        if (buildings[current].type == target_type) {
+            return distance[current];
+        }
+        
+        // 연결된 모든 경로 탐색
+        for (int i = 0; i < buildings[current].route_count; i++) {
+            int route_idx = buildings[current].connected_routes[i];
+            int next_building;
+            
+            if (routes[route_idx].building1 == buildings[current].id) {
+                next_building = find_building_index(routes[route_idx].building2);
+            } else {
+                next_building = find_building_index(routes[route_idx].building1);
+            }
+            
+            // 텔레포터는 무시하지 않고 길이 0으로 처리
+            if (!visited[next_building]) {
+                visited[next_building] = true;
+                
+                // 텔레포터인 경우 거리 증가 없음
+                if (routes[route_idx].capacity == 0) {
+                    distance[next_building] = distance[current];
+                } else {
+                    distance[next_building] = distance[current] + 1;
+                }
+                
+                queue[rear++] = next_building;
+            }
+        }
+    }
+    
+    return -1;  // 경로 없음
+}
+
+// 이동 시뮬레이션 - 4단계 이동 로직
+void simulate_astronaut_movement() {
+    // 매일 20일 동안 이동 시뮬레이션
+    for (current_day = 0; current_day < 20; current_day++) {
+        fprintf(stderr, "Simulating day %d\n", current_day);
+        
+        // 1단계: 텔레포터 이동
+        for (int i = 0; i < astronaut_count; i++) {
+            if (astronauts[i].arrived) continue;
+            
+            int current_building_idx = find_building_index(astronauts[i].current_building);
+            if (current_building_idx == -1) continue;
+            
+            // 각 건물에서 가능한 텔레포터 확인
+            for (int r = 0; r < buildings[current_building_idx].route_count; r++) {
+                int route_idx = buildings[current_building_idx].connected_routes[r];
+                
+                // 텔레포터인지 확인
+                if (routes[route_idx].capacity == 0) {
+                    int exit_building_id;
+                    
+                    // 텔레포터 출구 찾기
+                    if (routes[route_idx].building1 == astronauts[i].current_building) {
+                        exit_building_id = routes[route_idx].building2;
+                    } else {
+                        exit_building_id = routes[route_idx].building1;
+                    }
+                    
+                    // 텔레포터 출구 건물의 목적지까지 거리 확인
+                    int current_dist = calculate_distance_to_target(astronauts[i].current_building, astronauts[i].type);
+                    int exit_dist = calculate_distance_to_target(exit_building_id, astronauts[i].type);
+                    
+                    // 출구가 목적지에 가깝거나 같은 거리이면 텔레포트
+                    if (exit_dist != -1 && (current_dist == -1 || exit_dist <= current_dist)) {
+                        astronauts[i].current_building = exit_building_id;
+                        fprintf(stderr, "Astronaut %d teleported to building %d\n", i, exit_building_id);
+                        
+                        // 텔레포트 후 목적지 도착 확인
+                        int exit_building_idx = find_building_index(exit_building_id);
+                        if (exit_building_idx != -1 && buildings[exit_building_idx].type == astronauts[i].type) {
+                            astronauts[i].arrived = true;
+                            buildings_with_arrivals[exit_building_idx]++;
+                            fprintf(stderr, "Astronaut %d arrived at destination!\n", i);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // 2단계: 포드 할당 - 튜브 용량 고려
+        for (int i = 0; i < pod_count; i++) {
+            pods[i].is_moving = false;
+        }
+        
+        int pods_on_tubes[MAX_TUBES] = {0};  // 각 튜브에 할당된 포드 수
+        
+        // 포드 ID 순으로 정렬해서 우선권 부여
+        for (int i = 0; i < pod_count; i++) {
+            // 현재 포드 위치 확인
+            if (pods[i].current_pos >= pods[i].path_length - 1) {
+                // 루프가 아니면 멈춤
+                if (pods[i].path[0] != pods[i].path[pods[i].path_length - 1]) {
+                    continue;
+                }
+                pods[i].current_pos = 0;  // 루프 시작으로 리셋
+            }
+            
+            int current_building = pods[i].path[pods[i].current_pos];
+            int next_building = pods[i].path[pods[i].current_pos + 1];
+            
+            // 해당 건물 사이의 튜브 찾기
+            for (int r = 0; r < route_count; r++) {
+                if ((routes[r].building1 == current_building && routes[r].building2 == next_building) ||
+                    (routes[r].building2 == current_building && routes[r].building1 == next_building)) {
+                    
+                    // 텔레포터는 용량 제한 없음
+                    if (routes[r].capacity == 0) {
+                        pods[i].is_moving = true;
+                        break;
+                    }
+                    
+                    // 튜브 용량 확인
+                    if (pods_on_tubes[r] < routes[r].capacity) {
+                        pods[i].is_moving = true;
+                        pods_on_tubes[r]++;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // 3단계: 우주비행사 할당
+        for (int i = 0; i < astronaut_count; i++) {
+            if (astronauts[i].arrived || astronauts[i].pod_id != -1) continue;
+            
+            int current_building_id = astronauts[i].current_building;
+            int best_pod = -1;
+            int best_distance_improvement = 0;
+            
+            // 현재 건물에 있는 모든 움직이는 포드 확인
+            for (int p = 0; p < pod_count; p++) {
+                if (!pods[p].is_moving) continue;
+                
+                // 포드가 현재 건물에서 출발하는지 확인
+                if (pods[p].path[pods[p].current_pos] == current_building_id) {
+                    int next_building_id = pods[p].path[pods[p].current_pos + 1];
+                    
+                    // 다음 건물이 목적지에 더 가깝게 하는지 확인
+                    int current_dist = calculate_distance_to_target(current_building_id, astronauts[i].type);
+                    int next_dist = calculate_distance_to_target(next_building_id, astronauts[i].type);
+                    
+                    if (next_dist != -1 && (current_dist == -1 || next_dist < current_dist)) {
+                        int improvement = current_dist - next_dist;
+                        if (improvement > best_distance_improvement) {
+                            best_distance_improvement = improvement;
+                            best_pod = p;
+                        }
+                    }
+                }
+            }
+            
+            // 가장 좋은 포드에 우주비행사 할당
+            if (best_pod != -1) {
+                astronauts[i].pod_id = pods[best_pod].id;
+                fprintf(stderr, "Assigned astronaut %d to pod %d\n", i, pods[best_pod].id);
+            }
+        }
+        
+        // 4단계: 포드 이동
+        for (int i = 0; i < pod_count; i++) {
+            if (pods[i].is_moving) {
+                int current_building = pods[i].path[pods[i].current_pos];
+                int next_building = pods[i].path[pods[i].current_pos + 1];
+                
+                // 모든 우주비행사 이동
+                for (int a = 0; a < astronaut_count; a++) {
+                    if (astronauts[a].pod_id == pods[i].id) {
+                        astronauts[a].current_building = next_building;
+                        astronauts[a].pod_id = -1;  // 포드에서 하차
+                        
+                        // 목적지 도착 확인
+                        int building_idx = find_building_index(next_building);
+                        if (building_idx != -1 && buildings[building_idx].type == astronauts[a].type) {
+                            astronauts[a].arrived = true;
+                            buildings_with_arrivals[building_idx]++;
+                            fprintf(stderr, "Astronaut %d arrived at destination!\n", a);
+                        }
+                    }
+                }
+                
+                // 포드 위치 업데이트
+                pods[i].current_pos++;
+                if (pods[i].current_pos >= pods[i].path_length - 1 && 
+                    pods[i].path[0] == pods[i].path[pods[i].path_length - 1]) {
+                    pods[i].current_pos = 0;  // 루프 시작으로 리셋
+                }
+            }
+        }
+    }
+    
+    // 점수 계산
+    calculate_scores();
+}
+
+// 점수 계산 시스템
+void calculate_scores() {
+    int month_score = 0;
+    
+    for (int i = 0; i < astronaut_count; i++) {
+        if (astronauts[i].arrived) {
+            // 속도 점수: 50점에서 소요된 날짜 차감
+            int speed_score = 50 - (astronauts[i].arrival_day - astronauts[i].arrival_day);
+            if (speed_score < 0) speed_score = 0;
+            
+            // 인구 균형 점수: 50점에서 이미 도착한 우주비행사 수 차감
+            int building_idx = find_building_index(astronauts[i].current_building);
+            int balance_score = 50 - buildings_with_arrivals[building_idx] + 1;  // 자신은 제외
+            if (balance_score < 0) balance_score = 0;
+            
+            int total = speed_score + balance_score;
+            month_score += total;
+            
+            fprintf(stderr, "Astronaut %d scored %d points (speed: %d, balance: %d)\n",
+                    i, total, speed_score, balance_score);
+        }
+    }
+    
+    total_score += month_score;
+    fprintf(stderr, "Month %d score: %d, Total score: %d\n", month, month_score, total_score);
+}
+
+// 매월 말 이자 계산
+void apply_interest(int* resources) {
+    int interest = (*resources) * 0.1;  // 10% 이자
+    *resources += interest;
+    fprintf(stderr, "Applied 10%% interest: +%d resources, new total: %d\n", interest, *resources);
+}
+
+// 매월 초기화
+void initialize_monthly_data() {
+    // 착륙장에서 새로 도착한 우주비행사 설정
+    astronaut_count = 0;
+    
+    // 건물별 도착 우주비행사 수 초기화
+    for (int i = 0; i < building_count; i++) {
+        buildings_with_arrivals[i] = 0;
+    }
+    
+    // 이번 달에 이전 포드 위치 리셋
+    for (int i = 0; i < pod_count; i++) {
+        pods[i].current_pos = 0;
     }
 }
 
@@ -491,6 +787,18 @@ void execute_strategy(int resources) {
 
 int main()
 {
+    // 전역 변수 초기화
+    building_count = 0;
+    route_count = 0;
+    pod_count = 0;
+    astronaut_count = 0;
+    month = 0;
+    total_score = 0;
+    
+    for (int i = 0; i < MAX_BUILDINGS; i++) {
+        buildings_with_arrivals[i] = 0;
+    }
+    
     // 게임 루프
     while (1) {
         int resources;
@@ -498,6 +806,14 @@ int main()
         
         // 디버깅용 - 각 턴마다 자원 확인
         fprintf(stderr, "Starting month %d with %d resources\n", month, resources);
+        
+        // 이전 달이 끝났으면 이자 적용 (첫 달 제외)
+        if (month > 0) {
+            apply_interest(&resources);
+        }
+        
+        // 매월 데이터 초기화
+        initialize_monthly_data();
         
         int num_travel_routes;
         scanf("%d", &num_travel_routes);
@@ -564,8 +880,29 @@ int main()
             parse_building_properties(building_properties);
         }
         
+        // 새 우주비행사 데이터 구성 (착륙장 파싱 시)
+        for (int i = 0; i < building_count; i++) {
+            if (buildings[i].type == LANDING_PAD) {
+                for (int type = 1; type <= MODULE_TYPE_COUNT; type++) {
+                    for (int j = 0; j < buildings[i].astronaut_count[type]; j++) {
+                        astronauts[astronaut_count].id = astronaut_count;
+                        astronauts[astronaut_count].type = type;
+                        astronauts[astronaut_count].current_building = buildings[i].id;
+                        astronauts[astronaut_count].target_module = -1;  // 목표 모듈은 동적으로 결정
+                        astronauts[astronaut_count].pod_id = -1;
+                        astronauts[astronaut_count].arrival_day = 0;
+                        astronauts[astronaut_count].arrived = false;
+                        astronaut_count++;
+                    }
+                }
+            }
+        }
+        
         // 게임 전략 실행
         execute_strategy(resources);
+        
+        // 우주비행사 이동 시뮬레이션 (텔레포터→포드 할당→우주비행사 할당→이동)
+        simulate_astronaut_movement();
     }
     
     return 0;
