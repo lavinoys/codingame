@@ -31,8 +31,9 @@ const char* directions[] = {"SOUTH", "EAST", "NORTH", "WEST"};
 
 void debugPrintGrid(Game* game) {
     if (!DEBUG_MODE) return;
-    fprintf(stderr, "\n현재 그리드 상태:\n");
+    fprintf(stderr, "\n현재 그리드 상태 (L=%d, C=%d):\n", game->L, game->C);
     for (int i = 0; i < game->L; i++) {
+        fprintf(stderr, "%2d: ", i);  // 행 번호 표시 (2자리)
         for (int j = 0; j < game->C; j++) {
             if (i == game->pos.y && j == game->pos.x)
                 fprintf(stderr, "@");  // 현재 블런더 위치
@@ -60,6 +61,14 @@ void initGame(Game* game) {
 bool canMove(Game* game, int dir) {
     int nx = game->pos.x + dx[dir];
     int ny = game->pos.y + dy[dir];
+    
+    // 경계 체크 추가
+    if (nx < 0 || nx >= game->C || ny < 0 || ny >= game->L) {
+        if (DEBUG_MODE) fprintf(stderr, "이동 시도: %s (%d,%d) → (%d,%d) → 맵 경계 초과!\n", 
+                directions[dir], game->pos.x, game->pos.y, nx, ny);
+        return false;
+    }
+    
     char cell = game->grid[ny][nx];
 
     if (DEBUG_MODE) {
@@ -279,23 +288,43 @@ int main() {
     initGame(&game);
 
     // Read the map
-    scanf("%d %d", &game.L, &game.C);
-    fgetc(stdin);  // consume newline
+    if (scanf("%d %d", &game.L, &game.C) != 2) {
+        if (DEBUG_MODE) fprintf(stderr, "맵 크기 읽기 오류!\n");
+        return 1;
+    }
+    
+    if (getchar() != '\n') {
+        // 줄바꿈 문자가 아니면 하나 더 읽기
+        getchar();
+    }
 
     if (DEBUG_MODE) {
-        fprintf(stderr, "맵 크기: %d x %d\n", game.L, game.C);
+        fprintf(stderr, "맵 크기: %d행 x %d열\n", game.L, game.C);
     }
 
     for (int i = 0; i < game.L; i++) {
-        scanf("%[^\n]", game.grid[i]);
-        fgetc(stdin);
+        if (fgets(game.grid[i], MAX_SIZE+1, stdin) == NULL) {
+            if (DEBUG_MODE) fprintf(stderr, "행 %d 읽기 오류!\n", i);
+            continue;
+        }
+        
+        // 개행문자 제거
+        int len = strlen(game.grid[i]);
+        if (len > 0 && game.grid[i][len-1] == '\n') {
+            game.grid[i][len-1] = '\0';
+        }
 
         if (DEBUG_MODE) {
-            fprintf(stderr, "행 %d: %s\n", i, game.grid[i]);
+            fprintf(stderr, "행 %2d: %s (길이: %d)\n", i, game.grid[i], (int)strlen(game.grid[i]));
         }
 
         // Find start position and teleporters
         for (int j = 0; j < game.C; j++) {
+            if (j >= strlen(game.grid[i])) {
+                if (DEBUG_MODE) fprintf(stderr, "경고: 행 %d, 열 %d 맵 데이터 부족\n", i, j);
+                break;
+            }
+            
             if (game.grid[i][j] == '@') {
                 game.pos.x = j;
                 game.pos.y = i;
@@ -304,18 +333,25 @@ int main() {
                     fprintf(stderr, "시작 위치: (%d,%d)\n", j, i);
                 }
             } else if (game.grid[i][j] == 'T') {
-                game.teleporters[game.teleCount].x = j;
-                game.teleporters[game.teleCount].y = i;
-                if (DEBUG_MODE) {
-                    fprintf(stderr, "텔레포터 #%d: (%d,%d)\n", game.teleCount+1, j, i);
+                if (game.teleCount < 2) {
+                    game.teleporters[game.teleCount].x = j;
+                    game.teleporters[game.teleCount].y = i;
+                    if (DEBUG_MODE) {
+                        fprintf(stderr, "텔레포터 #%d: (%d,%d)\n", game.teleCount+1, j, i);
+                    }
+                    game.teleCount++;
+                } else {
+                    if (DEBUG_MODE) {
+                        fprintf(stderr, "경고: 텔레포터 초과 발견 (%d,%d)\n", j, i);
+                    }
                 }
-                game.teleCount++;
             }
         }
     }
 
     if (DEBUG_MODE) {
         fprintf(stderr, "맵 로딩 완료, 텔레포터 수: %d\n", game.teleCount);
+        debugPrintGrid(&game);
     }
 
     // Run the simulation
@@ -324,7 +360,7 @@ int main() {
     // Output results
     if (success) {
         if (DEBUG_MODE) {
-            fprintf(stderr, "시뮬레이션 성공! 결과 출력:\n");
+            fprintf(stderr, "시뮬레이션 성공! 결과 출력 (이동 %d회):\n", game.moveCount);
         }
         for (int i = 0; i < game.moveCount; i++) {
             printf("%s\n", game.moves[i]);
