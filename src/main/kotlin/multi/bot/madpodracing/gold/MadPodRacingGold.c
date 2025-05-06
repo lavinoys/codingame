@@ -31,6 +31,23 @@ double angle_between(int x1, int y1, int x2, int y2) {
     return atan2(y2 - y1, x2 - x1) * 180 / PI;
 }
 
+// 두 각도 사이의 최소 차이 계산 (0-360 범위에서)
+double min_angle_diff(double angle1, double angle2) {
+    // 각도를 0-360 범위로 정규화
+    angle1 = fmod(angle1, 360);
+    if (angle1 < 0) angle1 += 360;
+    
+    angle2 = fmod(angle2, 360);
+    if (angle2 < 0) angle2 += 360;
+    
+    // 두 각도 사이의 최소 차이 계산
+    double diff = fabs(angle1 - angle2);
+    if (diff > 180) {
+        diff = 360 - diff;
+    }
+    return diff;
+}
+
 int main()
 {
     scanf("%d", &laps);
@@ -99,33 +116,57 @@ int main()
                     target_y = target_y + (next_next_y - target_y) * adjustment_factor;
                 }
                 
-                // 속도 벡터를 활용한 목표 보정
-                // 높은 속도에서는 목표 지점을 약간 앞서 조준
+                // 속도 벡터를 활용한 목표 보정 (개선)
                 double speed = sqrt(vx[i]*vx[i] + vy[i]*vy[i]);
-                if (speed > 200) {
-                    // 현재 진행 방향으로 약간의 관성 추가
-                    target_x += vx[i] / 10;
-                    target_y += vy[i] / 10;
+                double momentum_factor = speed / 500.0; // 속도에 비례하는 관성 계수
+                if (speed > 100) {
+                    // 관성을 고려한 목표점 계산 (속도가 높을수록 더 앞서 조준)
+                    target_x += vx[i] / (8.0 / momentum_factor);
+                    target_y += vy[i] / (8.0 / momentum_factor);
                 }
                 
-                int thrust = 100;
+                // 정교한 추력 계산 - 수정된 각도 차이 계산 방식
+                double target_angle = angle_between(x[i], y[i], target_x, target_y);
+                angle_diff = min_angle_diff(angle[i], target_angle);
                 
-                // 회전이 큰 경우 감속
-                angle_diff = fabs(angle[i] - angle_between(x[i], y[i], target_x, target_y));
+                // 회전 각도에 따른 연속적인 추력 감소 (선형 감소)
+                int base_thrust = 100;
+                int thrust = base_thrust;
                 if (angle_diff > 90) {
-                    thrust = 40; // 더 강한 감속 (이전: 50)
-                } else if (angle_diff > 45) {
-                    thrust = 70; // 중간 정도 감속
+                    thrust = 20; // 최소 추력 보장 (이전: 0)
+                } else if (angle_diff > 0) {
+                    // 0~90도 사이에서 각도에 비례하여 감소 (부드러운 변화)
+                    thrust = (int)(base_thrust * (1.0 - angle_diff / 90.0));
+                    thrust = thrust < 20 ? 20 : thrust; // 최소 추력은 20
                 }
                 
-                // 체크포인트에 가까우면 감속: 더 정교한 거리 기반 감속
+                // 체크포인트 거리에 따른 감속 프로필 개선
+                double breaking_distance = speed * 1.3; // 현재 속도에 비례하는 제동 거리
+                
                 if (dist < 600) {
-                    thrust = 60;
-                } else if (dist < 1000 && speed > 400) {
-                    // 속도가 빠른 상태에서 체크포인트에 접근할 때 약간 감속
-                    thrust = 80;
+                    // 매우 가까운 경우 (체크포인트 내부 또는 바로 근처)
+                    thrust = 60; 
+                } else if (dist < breaking_distance && speed > 350) {
+                    // 현재 속도로 빠르게 도달 가능한 거리이고 속도가 높은 경우 감속
+                    double deceleration_factor = (dist / breaking_distance);
+                    int reduced_thrust = (int)(base_thrust * deceleration_factor * 0.7);
+                    thrust = thrust < reduced_thrust ? thrust : reduced_thrust; // 더 작은 값으로 결정
                 }
                 
+                // 다음 체크포인트와 현재 체크포인트 사이의 각도가 큰 경우 (예: 급회전 필요)
+                double checkpoint_angle_diff = fabs(checkpoint_angle - angle_between(x[i], y[i], target_x, target_y));
+                if (checkpoint_angle_diff > 100 && dist < 1800) {
+                    // 급격한 방향 전환이 필요한 체크포인트에 접근할 때
+                    thrust = (int)(thrust * 0.7); // 30% 감속
+                }
+                
+                // 체크포인트 간 경로 최적화를 위한 추력 조정
+                // 다음 체크포인트와 그 다음 체크포인트가 가까우면 신중하게 접근
+                if (next_to_next_next_dist < 2000 && dist < 1500) {
+                    // 체크포인트 연속 구간에서는 약간 감속
+                    thrust = (int)(thrust * 0.9);
+                }
+
                 // 충돌 감지 및 예측
                 bool collision_imminent = false;
                 double min_collision_dist = 9999999;
@@ -161,15 +202,16 @@ int main()
                     shield_cooldown[i] = 3; // 쉴드 3턴 유지
                     printf("%d %d SHIELD [RACER] SHIELD\n", target_x, target_y);
                 }
-                // 부스트 사용 조건 개선
-                else if (boost_available && dist > 3500 && angle_diff < 5 && 
-                         next_to_next_next_dist > 3000) { // 다음 체크포인트 이후 거리도 고려
+                // 부스트 사용 조건 개선 (관성 활용)
+                else if (boost_available && dist > 3000 && angle_diff < 3.0 && 
+                         next_to_next_next_dist > 3000 && speed < 500) { 
+                    // 직선 구간에서 속도가 충분히 높지 않을 때 부스트 사용
                     printf("%d %d BOOST [RACER] BOOST\n", target_x, target_y);
                     boost_available = false;
                 }
                 else {
-                    printf("%d %d %d [RACER] thrust: %d angle_diff: %.1f\n", 
-                           target_x, target_y, thrust, thrust, angle_diff);
+                    printf("%d %d %d [RACER] thrust: %d angle_diff: %.1f speed: %.0f\n", 
+                           target_x, target_y, thrust, thrust, angle_diff, speed);
                 }
             }
             else { // 블로커 (두 번째 포드)
@@ -205,31 +247,56 @@ int main()
                     intercept_y = y_op[lead_opponent] + (op_target_y - y_op[lead_opponent]) * ratio;
                 }
                 
+                // 블로커의 각도 차이 계산도 수정
+                double target_angle = angle_between(x[i], y[i], intercept_x, intercept_y);
+                double blocker_angle_diff = min_angle_diff(angle[i], target_angle);
+                
+                // 개선된 블로커 추력 계산 로직
+                // 연속적인 추력 조정 (선형)
                 int thrust = 100;
-                double collision_dist = distance(x[i], y[i], x_op[lead_opponent], y_op[lead_opponent]);
-                double my_speed = sqrt(vx[i]*vx[i] + vy[i]*vy[i]);
-                
-                // 블로커의 각도 차이 계산
-                double blocker_angle_diff = fabs(angle[i] - angle_between(x[i], y[i], intercept_x, intercept_y));
-                
-                // 각도에 따른 추력 조정
                 if (blocker_angle_diff > 90) {
-                    thrust = 50;
-                } else if (blocker_angle_diff > 45) {
-                    thrust = 80;
+                    thrust = 15; // 최소 추력 보장 (이전: 10)
+                } else if (blocker_angle_diff > 0) {
+                    // 각도에 따라 부드럽게 감소
+                    thrust = (int)(100.0 * (1.0 - blocker_angle_diff / 120.0));
+                    thrust = thrust < 15 ? 15 : thrust; // 최소값 제한
                 }
                 
-                // 상대방이 가까이 있고 쉴드가 사용 가능하면 쉴드 사용
-                if (collision_dist < 850 && shield_cooldown[i] == 0 && my_speed > 200) {
-                    // 쉴드 활성화 시 목표 위치 저장
-                    shield_target_x[i] = intercept_x;
-                    shield_target_y[i] = intercept_y;
-                    shield_cooldown[i] = 3; // 쉴드 3턴 유지
-                    printf("%d %d SHIELD [BLOCKER] SHIELD\n", intercept_x, intercept_y);
-                } else {
-                    printf("%d %d %d [BLOCKER] thrust: %d target: %d\n", 
-                          intercept_x, intercept_y, thrust, thrust, lead_opponent);
+                double collision_dist = distance(x[i], y[i], x_op[lead_opponent], y_op[lead_opponent]);
+                
+                // 충돌 임박 시 상황에 따라 추력 조정
+                if (collision_dist < 1200 && collision_dist > 800) {
+                    // 상대방에 가까워질 때 정교한 속도 조절
+                    double rel_vx = vx[i] - vx_op[lead_opponent];
+                    double rel_vy = vy[i] - vy_op[lead_opponent];
+                    double rel_speed = sqrt(rel_vx*rel_vx + rel_vy*rel_vy);
+                    
+                    if (rel_speed > 300) {
+                        thrust = (int)(thrust * 0.8); // 상대 속도가 높으면 약간 감속
+                    } else if (rel_speed < 100) {
+                        thrust = 100; // 상대 속도가 낮으면 최대 추력
+                    }
                 }
+                
+                // 상대방에게 매우 가까울 때는 충돌 각도 최적화
+                if (collision_dist < 800 && shield_cooldown[i] == 0) {
+                    // 충돌 직전에 상대방 방향으로 추력 최대화
+                    if (sqrt(vx[i]*vx[i] + vy[i]*vy[i]) < 300) {
+                        thrust = 100;
+                    }
+                    
+                    // 상대방이 가까이 있고 쉴드가 사용 가능하면 쉴드 사용
+                    if (collision_dist < 500 || (collision_dist < 850 && sqrt(vx[i]*vx[i] + vy[i]*vy[i]) > 250)) {
+                        shield_target_x[i] = intercept_x;
+                        shield_target_y[i] = intercept_y;
+                        shield_cooldown[i] = 3;
+                        printf("%d %d SHIELD [BLOCKER] SHIELD\n", intercept_x, intercept_y);
+                        continue;
+                    }
+                }
+                
+                printf("%d %d %d [BLOCKER] thrust: %d target: %d angle: %.1f\n", 
+                      intercept_x, intercept_y, thrust, thrust, lead_opponent, blocker_angle_diff);
             }
         }
     }
