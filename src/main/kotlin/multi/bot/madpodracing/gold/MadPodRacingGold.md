@@ -1,6 +1,6 @@
 # <https://www.codingame.com/multiplayer/bot-programming/mad-pod-racing>
 
-### What will I learn?
+## What will I learn?
 
 This puzzle game starts with a step by step tutorial that will help you get familiar with CodinGame’s multiplayer games. It provides an easy introduction to bot programming through a starship race.
 The aim of the game is of course to win the race against other players! To succeed in this challenge, you will be able to use different mathematical concepts such as trajectory calculation, collisions, speed vector, or inertia.
@@ -36,7 +36,7 @@ The i/o protocol has been modified (Pro tip: you can refresh the default code). 
 
 ## The Goal
 
-### Win the race.
+### Win the race
 
 #### Rules
 
@@ -71,11 +71,11 @@ x y shield
 x y shield
 x y shield
 ```
- 
+
 #### Victory Conditions
 
 Be the first to complete all the laps of the circuit with one pod.
- 
+
 #### Lose Conditions
 
 Your program provides incorrect output.
