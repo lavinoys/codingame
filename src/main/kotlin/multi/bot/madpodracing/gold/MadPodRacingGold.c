@@ -205,6 +205,7 @@ void optimize_racing_line(int current_x, int current_y, int current_vx, int curr
 void calculate_drift_target(int current_x, int current_y, int vx, int vy, int speed,
                           int cp_x, int cp_y, int next_cp_x, int next_cp_y,
                           double angle_diff, double next_angle_diff,
+                          int next_checkpoint_id, // 추가된 파라미터
                           int* target_x, int* target_y) {
     
     // 현재 이동 방향과 목표 방향 간의 벡터 계산
@@ -215,12 +216,32 @@ void calculate_drift_target(int current_x, int current_y, int vx, int vy, int sp
     // 현재 체크포인트까지의 거리
     double dist_to_cp = distance(current_x, current_y, cp_x, cp_y);
     
-    // 현재 체크포인트에서 다음 체크포인트로의 회전 방향 결정
+    // 체크포인트 간의 방향 벡터 계산
     double cp_to_next_dir = angle_between(cp_x, cp_y, next_cp_x, next_cp_y);
-    double turn_dir = min_angle_diff(target_dir, cp_to_next_dir);
-    int turn_sign = 1;
     
-    // 시계 방향 또는 반시계 방향 회전인지 확인
+    // 다음 체크포인트 이후의 체크포인트 ID 계산
+    int next_next_cp_id = (next_checkpoint_id + 2) % checkpoint_count;
+    int next_next_cp_x = checkpoint_x[next_next_cp_id];
+    int next_next_cp_y = checkpoint_y[next_next_cp_id];
+    
+    // 다음 체크포인트에서 그 다음 체크포인트로의 방향
+    double next_to_next_next_dir = angle_between(next_cp_x, next_cp_y, next_next_cp_x, next_next_cp_y);
+    
+    // 현재->다음, 다음->다다음 체크포인트 간 각도 차이 계산 (코너의 특성)
+    double corner_sequence_angle = min_angle_diff(cp_to_next_dir, next_to_next_next_dir);
+    
+    // S자 코너인지 확인 (방향 전환이 반대로 되는지)
+    bool is_s_curve = false;
+    double raw_diff1 = target_dir - cp_to_next_dir;
+    double raw_diff2 = cp_to_next_dir - next_to_next_next_dir;
+    if (raw_diff1 > 180) raw_diff1 -= 360;
+    if (raw_diff1 < -180) raw_diff1 += 360;
+    if (raw_diff2 > 180) raw_diff2 -= 360;
+    if (raw_diff2 < -180) raw_diff2 += 360;
+    is_s_curve = (raw_diff1 * raw_diff2) < 0; // 부호가 다르면 S자 코너
+    
+    // 현재 턴 방향 결정 (1: 시계, -1: 반시계)
+    int turn_sign = 1;
     double raw_diff = target_dir - cp_to_next_dir;
     if (raw_diff > 180) raw_diff -= 360;
     if (raw_diff < -180) raw_diff += 360;
@@ -243,13 +264,34 @@ void calculate_drift_target(int current_x, int current_y, int vx, int vy, int sp
         // 체크포인트에 가까울수록 드리프트 효과 감소
         double cp_distance_factor = fmin(1.0, dist_to_cp / 2000.0);
         
-        // 현재 체크포인트를 통과하기 위한 접선 계산 - 각도 조정값 제한
-        // 최대 각도 제한을 45도로 낮춤 (이전 70도에서)
-        double tangent_factor = fmin(45.0, next_angle_diff / 3);
+        // S자 코너인 경우 드리프트 각도 조정
+        double tangent_factor;
+        if (is_s_curve) {
+            // S자 코너에서는 첫 번째 코너를 덜 공격적으로 진입
+            tangent_factor = fmin(35.0, next_angle_diff / 4); 
+            fprintf(stderr, "S자 코너 감지! 드리프트 각도 감소\n");
+        } else if (corner_sequence_angle > 100) {
+            // 두 코너가 매우 급격하게 방향이 바뀌는 경우 더 공격적으로
+            tangent_factor = fmin(55.0, next_angle_diff / 2.5);
+            fprintf(stderr, "급격한 연속 코너 감지! 드리프트 각도 증가\n");
+        } else {
+            // 일반적인 코너
+            tangent_factor = fmin(45.0, next_angle_diff / 3);
+        }
+        
         double tangent_angle = target_dir + turn_sign * tangent_factor * cp_distance_factor;
         
-        // 속도와 거리에 비례하는 드리프트 강도 축소
+        // 속도와 코너 시퀀스에 따른 드리프트 강도 조정
         double base_drift_factor = 0.15 + (speed / 2000.0);
+        
+        // S자 코너나 연속된 급격한 코너에서는 드리프트 강도 조정
+        if (is_s_curve) {
+            base_drift_factor *= 0.8; // S자 코너에서 드리프트 강도 감소
+        } else if (corner_sequence_angle < 30) {
+            // 거의 일직선 코너 시퀀스에서는 드리프트 강도 증가
+            base_drift_factor *= 1.2;
+        }
+        
         double drift_factor = base_drift_factor * cp_distance_factor;
         
         // 체크포인트에 가까워지면 더 직접적인 접근으로 전환
@@ -259,25 +301,32 @@ void calculate_drift_target(int current_x, int current_y, int vx, int vy, int sp
             weight_to_cp = weight_to_cp * weight_to_cp; // 제곱 적용으로 더 빨리 감소
             
             // 접선 각도와 체크포인트 방향 간의 가중치 혼합
-            // 체크포인트 방향 가중치 증가 (80%)
             tangent_angle = tangent_angle * (1 - weight_to_cp * 0.8) + target_dir * (weight_to_cp * 0.8);
             
-            // 거리가 가까울수록 드리프트 강도 감소 - 더 급격히 감소
+            // S자 코너에 접근할 때는 다음 체크포인트를 향한 각도도 약간 고려
+            if (is_s_curve && dist_to_cp < 1000) {
+                double next_cp_influence = 0.2 * weight_to_cp;
+                tangent_angle = tangent_angle * (1 - next_cp_influence) + cp_to_next_dir * next_cp_influence;
+            }
+            
+            // 거리가 가까울수록 드리프트 강도 감소
             drift_factor *= (1.0 - weight_to_cp * 0.9);
         }
         
-        // 드리프트 거리 제한 - 최대 거리 감소 (600 -> 450)
+        // 드리프트 거리 계산 및 제한
         double drift_distance = dist_to_cp * drift_factor;
-        drift_distance = drift_distance > 450 ? 450 : drift_distance;
+        
+        // S자 코너에서는 드리프트 거리를 더 제한
+        double max_drift_distance = is_s_curve ? 350 : 450;
+        drift_distance = drift_distance > max_drift_distance ? max_drift_distance : drift_distance;
         
         // 체크포인트를 벗어나지 않도록 최소 각도 보장
         double min_cp_angle = angle_between(current_x, current_y, cp_x, cp_y);
         double angle_to_cp = min_angle_diff(tangent_angle, min_cp_angle);
         
         // 각도 차이가 너무 크면 체크포인트 방향으로 더 맞춤
-        // 각도 제한을 강화 (60 -> 45)
         if (angle_to_cp > 45) {
-            // 체크포인트 방향으로 더 강하게 조정 (50% -> 70%)
+            // 체크포인트 방향으로 더 강하게 조정
             tangent_angle = min_cp_angle + (tangent_angle - min_cp_angle) * 0.3;
         }
         
@@ -304,10 +353,9 @@ void calculate_drift_target(int current_x, int current_y, int vx, int vy, int sp
             *target_y = current_y + (int)(sin(tangent_angle * PI / 180.0) * drift_distance);
         }
         
-        fprintf(stderr, "DRIFT: 속도:%d 각도차:%.1f 드리프트강도:%.2f 거리:%.0f\n", 
-                speed, next_angle_diff, drift_factor, drift_distance);
+        fprintf(stderr, "DRIFT: 속도:%d 각도차:%.1f S자:%s 연속각도:%.1f 드리프트강도:%.2f 거리:%.0f\n", 
+                speed, next_angle_diff, is_s_curve ? "YES" : "NO", corner_sequence_angle, drift_factor, drift_distance);
     } else {
-        // 드리프트가 필요 없으면 원래 타겟 사용
         *target_x = cp_x;
         *target_y = cp_y;
     }
@@ -532,7 +580,7 @@ int main()
                 int drift_target_x, drift_target_y;
                 calculate_drift_target(x[i], y[i], vx[i], vy[i], (int)speed,
                                       target_x, target_y, next_next_x, next_next_y,
-                                      angle_diff, next_angle_diff,
+                                      angle_diff, next_angle_diff, next_check_point_id[i],
                                       &drift_target_x, &drift_target_y);
                 
                 // 급격한 회전이 필요할 때는 드리프트 타겟 사용
