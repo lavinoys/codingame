@@ -255,6 +255,140 @@ void calculate_drift_target(int current_x, int current_y, int vx, int vy, int sp
     }
 }
 
+// 고급 차단 전략 계산 함수
+void calculate_advanced_interception(
+    int blocker_x, int blocker_y, int blocker_vx, int blocker_vy, int blocker_angle,
+    int op_x, int op_y, int op_vx, int op_vy, int op_angle, int op_next_cp_id,
+    int* intercept_x, int* intercept_y, int* thrust, bool* use_shield) {
+    
+    // 상대가 향하는 체크포인트
+    int op_target_x = checkpoint_x[op_next_cp_id];
+    int op_target_y = checkpoint_y[op_next_cp_id];
+    
+    // 다음 체크포인트
+    int op_next_next_cp_id = (op_next_cp_id + 1) % checkpoint_count;
+    int op_next_target_x = checkpoint_x[op_next_next_cp_id];
+    int op_next_target_y = checkpoint_y[op_next_next_cp_id];
+    
+    // 상대방의 다양한 시점 미래 위치 예측 (최대 6턴)
+    int future_positions_x[6], future_positions_y[6];
+    int future_velocities_x[6], future_velocities_y[6];
+    
+    // 현재 위치 초기화
+    future_positions_x[0] = op_x;
+    future_positions_y[0] = op_y;
+    future_velocities_x[0] = op_vx;
+    future_velocities_y[0] = op_vy;
+    
+    // 상대방의 체크포인트 도달 예상 시간 (턴 단위)
+    double op_speed = sqrt(op_vx*op_vx + op_vy*op_vy);
+    double dist_to_cp = distance(op_x, op_y, op_target_x, op_target_y);
+    int estimated_turns_to_cp = (int)(dist_to_cp / (op_speed > 0 ? op_speed : 100));
+    estimated_turns_to_cp = estimated_turns_to_cp < 1 ? 1 : estimated_turns_to_cp;
+    estimated_turns_to_cp = estimated_turns_to_cp > 5 ? 5 : estimated_turns_to_cp;
+    
+    // 차단 시점 결정 - 상대가 체크포인트에 도달하기 직전이 효과적
+    int intercept_turn = estimated_turns_to_cp - 1;
+    intercept_turn = intercept_turn < 1 ? 1 : intercept_turn;
+    intercept_turn = intercept_turn > 4 ? 4 : intercept_turn;
+    
+    // 예상되는 체크포인트 도달 시점
+    bool will_reach_checkpoint = false;
+    
+    // 미래 위치 예측 시뮬레이션 (최대 5턴)
+    for (int step = 1; step <= 5; step++) {
+        // 이전 단계에서 체크포인트를 달성했는지 확인
+        double prev_dist_to_cp = distance(future_positions_x[step-1], future_positions_y[step-1], op_target_x, op_target_y);
+        
+        if (prev_dist_to_cp < CHECKPOINT_RADIUS) {
+            // 체크포인트에 도달할 것으로 예상되면 다음 체크포인트로 타겟 전환
+            op_target_x = op_next_target_x;
+            op_target_y = op_next_target_y;
+            will_reach_checkpoint = true;
+        }
+        
+        // 상대의 다음 위치 예측
+        double target_angle = angle_between(future_positions_x[step-1], future_positions_y[step-1], op_target_x, op_target_y);
+        double current_angle = op_angle; // 실제 포드 각도 사용
+        double angle_diff = min_angle_diff(current_angle, target_angle);
+        
+        // 각도에 따른 추력 예측
+        int predicted_thrust = 100;
+        if (angle_diff > 90) {
+            predicted_thrust = 0;
+        } else if (angle_diff > 0) {
+            predicted_thrust = (int)(100 - angle_diff * 0.7);
+            predicted_thrust = predicted_thrust < 0 ? 0 : predicted_thrust;
+        }
+        
+        // 다음 위치 예측
+        predict_future_position(
+            future_positions_x[step-1], future_positions_y[step-1],
+            future_velocities_x[step-1], future_velocities_y[step-1],
+            current_angle, predicted_thrust, 1,
+            &future_positions_x[step], &future_positions_y[step],
+            &future_velocities_x[step], &future_velocities_y[step]
+        );
+    }
+    
+    // 차단 전략 결정
+    int target_step = intercept_turn;
+    
+    // 체크포인트 진입 시 차단이 효과적
+    if (will_reach_checkpoint && estimated_turns_to_cp <= 4) {
+        target_step = estimated_turns_to_cp;
+        fprintf(stderr, "체크포인트 진입 차단! 예상 시간: %d턴\n", target_step);
+    }
+    
+    // 최종 차단 위치 계산
+    int future_x = future_positions_x[target_step];
+    int future_y = future_positions_y[target_step];
+    
+    // 상대의 예상 진행 방향 벡터
+    double future_vx = future_velocities_x[target_step];
+    double future_vy = future_velocities_y[target_step];
+    double future_speed = sqrt(future_vx*future_vx + future_vy*future_vy);
+    double future_angle = atan2(future_vy, future_vx) * 180 / PI;
+    
+    // 차단 전략 - 상대 진행 방향에 따른 최적 차단 위치 계산
+    double blocking_distance = 300 + future_speed * 0.3; // 속도에 비례하는 차단 거리
+    double blocking_angle;
+    
+    // 체크포인트에 가까울수록 직접 경로를 차단
+    if (dist_to_cp < 1500) {
+        // 상대와 체크포인트 사이의 직접 경로 차단
+        blocking_angle = angle_between(future_x, future_y, op_target_x, op_target_y);
+        blocking_distance = dist_to_cp * 0.4; // 거리의 40% 지점
+        fprintf(stderr, "체크포인트 접근 차단 전략\n");
+    } else {
+        // 일반적인 상황: 상대 진행 방향의 앞쪽 90도 각도에서 차단
+        blocking_angle = future_angle;
+        fprintf(stderr, "진행 방향 차단 전략\n");
+    }
+    
+    // 최종 차단 위치 계산
+    *intercept_x = future_x + (int)(cos(blocking_angle * PI / 180) * blocking_distance);
+    *intercept_y = future_y + (int)(sin(blocking_angle * PI / 180) * blocking_distance);
+    
+    // 블로커와 차단 지점 사이의 거리
+    double dist_to_target = distance(blocker_x, blocker_y, *intercept_x, *intercept_y);
+    
+    // 추력 결정 - 거리와 각도에 따라 조절
+    *thrust = 100;
+    if (dist_to_target < 1000) {
+        // 가까울수록 정밀한 움직임을 위해 추력 조정
+        *thrust = (int)(70 + 30 * (dist_to_target / 1000));
+    }
+    
+    // 충돌 임박 여부 판단
+    double collision_dist = distance(blocker_x, blocker_y, future_x, future_y);
+    *use_shield = (collision_dist < 850 && target_step <= 2 && future_speed > 100);
+    
+    // 디버깅용 로그
+    fprintf(stderr, "예측 차단: 타겟턴=%d 거리=%.0f 쉴드=%s 추력=%d\n", 
+            target_step, collision_dist, *use_shield ? "YES" : "NO", *thrust);
+}
+
 int main()
 {
     scanf("%d", &laps);
@@ -458,83 +592,35 @@ int main()
                     lead_opponent = (dist0 < dist1) ? 0 : 1;
                 }
                 
-                // 리더의 미래 위치 예측 (2턴 이후)
-                int future_lead_x, future_lead_y, future_lead_vx, future_lead_vy;
-                predict_future_position(
+                // 고급 예측 기반 차단 전략 계산
+                int intercept_x, intercept_y, thrust;
+                bool use_shield = false;
+                
+                calculate_advanced_interception(
+                    x[i], y[i], vx[i], vy[i], angle[i],
                     x_op[lead_opponent], y_op[lead_opponent], 
                     vx_op[lead_opponent], vy_op[lead_opponent],
-                    angle_op[lead_opponent], 100, 2,
-                    &future_lead_x, &future_lead_y, &future_lead_vx, &future_lead_vy
+                    angle_op[lead_opponent], next_check_point_id_op[lead_opponent],
+                    &intercept_x, &intercept_y, &thrust, &use_shield
                 );
-                
-                // 상대가 향하는 체크포인트
-                int op_target_x = checkpoint_x[next_check_point_id_op[lead_opponent]];
-                int op_target_y = checkpoint_y[next_check_point_id_op[lead_opponent]];
-                
-                // 상대방과 체크포인트 사이 경로 차단 지점 계산
-                // 체크포인트에 가까워질수록 차단율 증가
-                double op_to_cp_dist = distance(future_lead_x, future_lead_y, op_target_x, op_target_y);
-                double blocking_ratio = 0.7; // 기본 차단 지점은 70% 지점
-                
-                if (op_to_cp_dist < 2000) {
-                    blocking_ratio = 0.5 + (2000 - op_to_cp_dist) / 4000; // 더 가까울수록 더 가까운 지점에서 차단
-                    blocking_ratio = blocking_ratio > 0.8 ? 0.8 : blocking_ratio; // 최대 80%
-                }
-                
-                int intercept_x = future_lead_x + (int)((op_target_x - future_lead_x) * blocking_ratio);
-                int intercept_y = future_lead_y + (int)((op_target_y - future_lead_y) * blocking_ratio);
                 
                 // 블로커의 각도 차이 계산
                 double target_angle = angle_between(x[i], y[i], intercept_x, intercept_y);
                 double blocker_angle_diff = min_angle_diff(angle[i], target_angle);
                 
-                // 추력 조정 - 더 부드럽게
-                int thrust = 100;
-                if (blocker_angle_diff > 90) {
-                    thrust = 20;
-                } else if (blocker_angle_diff > 0) {
-                    thrust = (int)(100.0 * (1.0 - blocker_angle_diff / 100.0));
-                    thrust = thrust < 20 ? 20 : thrust;
-                }
+                // 충돌 거리 및 코스 계산
+                double collision_dist = distance(x[i], y[i], x_op[lead_opponent], y_op[lead_opponent]);
                 
-                // 충돌 거리에 따른 추력 조정
-                double collision_dist = distance(x[i], y[i], future_lead_x, future_lead_y);
-                bool on_intercept_course = false;
-                
-                if (collision_dist < 1400) {
-                    // 상대방 상대 속도 계산
-                    double rel_vx = vx[i] - vx_op[lead_opponent];
-                    double rel_vy = vy[i] - vy_op[lead_opponent];
-                    double rel_speed = sqrt(rel_vx*rel_vx + rel_vy*rel_vy);
-                    
-                    // 충돌 예상 벡터와 실제 방향 벡터의 각도
-                    double movement_direction = angle_between(0, 0, vx[i], vy[i]);
-                    double collision_direction = angle_between(0, 0, future_lead_x - x[i], future_lead_y - y[i]);
-                    double intersection_angle = min_angle_diff(movement_direction, collision_direction);
-                    
-                    // 충돌 코스에 있는지 확인
-                    on_intercept_course = intersection_angle < 30 && rel_speed > 200;
-                    
-                    if (on_intercept_course) {
-                        // 근접 시 최대 추력으로 충돌 임팩트 강화
-                        thrust = 100;
-                    }
-                }
-                
-                // 쉴드 사용 여부 결정
-                bool use_shield = false;
-                
-                // 상대에 매우 가깝고 충돌 코스에 있으면 쉴드 사용
-                if (collision_dist < 800 && on_intercept_course && shield_cooldown[i] == 0) {
-                    use_shield = true;
+                // 쉴드 사용이 권장되고 쿨다운이 없으면
+                if (use_shield && shield_cooldown[i] == 0) {
                     shield_target_x[i] = intercept_x;
                     shield_target_y[i] = intercept_y;
                     shield_cooldown[i] = 3;
-                    printf("%d %d SHIELD [BLOCKER] 차단충돌! 거리:%.0f\n", intercept_x, intercept_y, collision_dist);
+                    printf("%d %d SHIELD [BLOCKER] 전략차단! 거리:%.0f\n", intercept_x, intercept_y, collision_dist);
                 } else {
                     // 일반 추력 사용
-                    printf("%d %d %d [BLOCKER] 리더:%d 각도:%.1f 거리:%.0f\n", 
-                           intercept_x, intercept_y, thrust, lead_opponent, blocker_angle_diff, collision_dist);
+                    printf("%d %d %d [BLOCKER] 예측차단 리더:%d 각도:%.1f\n", 
+                           intercept_x, intercept_y, thrust, lead_opponent, blocker_angle_diff);
                 }
             }
         }
