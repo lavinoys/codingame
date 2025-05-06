@@ -247,42 +247,62 @@ void calculate_drift_target(int current_x, int current_y, int vx, int vy, int sp
     if (raw_diff < -180) raw_diff += 360;
     turn_sign = raw_diff > 0 ? -1 : 1;
     
-    // 개선된 드리프트 적용 조건
+    // 개선된 드리프트 적용 조건 (속도 기반 예측으로 개선)
     // 1. 속도가 충분히 높고 
-    // 2. 다음 턴이 급격하고 (각도 > 50)
-    // 3. 체크포인트에 너무 가깝지 않을 때 (최소 700 이상)
-    // 4. 현재 각도 차이가 크지 않을 때 (30도 이하)
-    bool apply_drift = speed > 350 && 
-                       next_angle_diff > 50 && 
-                       dist_to_cp > CHECKPOINT_RADIUS * 1.2 && 
-                       dist_to_cp > 700 &&
-                       dir_diff < 30;
+    // 2. 다음 턴이 급격하고 (각도 > 50, 또는 속도가 높을수록 더 작은 각도에도 대응)
+    // 3. 체크포인트에 너무 가깝지 않을 때 
+    // 4. 현재 각도 차이가 크지 않을 때
+    double speed_angle_threshold = 50.0 - (speed - 350) / 15.0; // 속도가 높을수록 더 작은 각도에도 반응
+    speed_angle_threshold = speed_angle_threshold < 30.0 ? 30.0 : speed_angle_threshold;
     
-    // 드리프트 계산
-    if (apply_drift && dist_to_cp < 2500) {
+    // 속도에 비례하는 드리프트 시작 거리 (더 빠를수록 더 일찍 드리프트 시작)
+    double drift_start_distance = CHECKPOINT_RADIUS * 1.2 + (speed * 3.0);
+    drift_start_distance = drift_start_distance > 3000 ? 3000 : drift_start_distance;
+    
+    // 관성 기반으로 개선된 드리프트 적용 조건
+    bool apply_drift = speed > 250 && // 더 낮은 속도에서도 드리프트 허용
+                       next_angle_diff > speed_angle_threshold && 
+                       dist_to_cp > CHECKPOINT_RADIUS * 1.1 && // 더 가깉게 허용
+                       dist_to_cp < 4000 && // 너무 멀면 드리프트 효과 감소
+                       dist_to_cp < drift_start_distance && // 속도에 비례한 시작 거리
+                       dir_diff < 45; // 방향 차이 여유 증가
+    
+    // 드리프트 계산 - 관성과 다음 체크포인트 예측 강화
+    if (apply_drift) {
+        // 체크포인트까지 거리와 속도를 모두 고려한 드리프트 강도 계산
+        // 속도가 높을수록, 거리가 가까울수록 드리프트 시작
+        double drift_urgency = (speed / 500.0) * (1.0 - (dist_to_cp / drift_start_distance));
+        drift_urgency = drift_urgency < 0 ? 0 : (drift_urgency > 1.0 ? 1.0 : drift_urgency);
+        
+        // 관성 벡터 계산 (현재 속도 방향)
+        double momentum_angle = atan2(vy, vx) * 180 / PI;
+        double momentum_factor = 0.3 + (speed / 1500.0); // 속도가 높을수록 관성 영향 증가
+        momentum_factor = momentum_factor > 0.7 ? 0.7 : momentum_factor;
+        
         // 체크포인트까지 거리에 따른 드리프트 강도 조절
-        // 체크포인트에 가까울수록 드리프트 효과 감소
         double cp_distance_factor = fmin(1.0, dist_to_cp / 2000.0);
         
-        // S자 코너인 경우 드리프트 각도 조정
+        // S자 코너인 경우 드리프트 각도 조정 (속도 반영)
         double tangent_factor;
         if (is_s_curve) {
             // S자 코너에서는 첫 번째 코너를 덜 공격적으로 진입
-            tangent_factor = fmin(35.0, next_angle_diff / 4); 
-            fprintf(stderr, "S자 코너 감지! 드리프트 각도 감소\n");
+            tangent_factor = fmin(35.0 + (speed / 40.0), next_angle_diff / 3); 
+            fprintf(stderr, "S자 코너 감지! 드리프트 각도: %.1f (속도: %d)\n", tangent_factor, (int)speed);
         } else if (corner_sequence_angle > 100) {
             // 두 코너가 매우 급격하게 방향이 바뀌는 경우 더 공격적으로
-            tangent_factor = fmin(55.0, next_angle_diff / 2.5);
-            fprintf(stderr, "급격한 연속 코너 감지! 드리프트 각도 증가\n");
+            tangent_factor = fmin(55.0 + (speed / 30.0), next_angle_diff / 2.2);
+            fprintf(stderr, "급격한 연속 코너 감지! 드리프트 각도: %.1f (속도: %d)\n", tangent_factor, (int)speed);
         } else {
-            // 일반적인 코너
-            tangent_factor = fmin(45.0, next_angle_diff / 3);
+            // 일반적인 코너 (속도에 비례하여 각도 증가)
+            tangent_factor = fmin(45.0 + (speed / 35.0), next_angle_diff / 2.8);
         }
         
-        double tangent_angle = target_dir + turn_sign * tangent_factor * cp_distance_factor;
+        // 관성 벡터와 목표 방향을 결합한 최종 드리프트 방향 계산
+        double inertia_adjusted_target = target_dir * (1.0 - momentum_factor) + momentum_angle * momentum_factor;
+        double tangent_angle = inertia_adjusted_target + turn_sign * tangent_factor * cp_distance_factor;
         
-        // 속도와 코너 시퀀스에 따른 드리프트 강도 조정
-        double base_drift_factor = 0.15 + (speed / 2000.0);
+        // 속도와 코너 시퀀스에 따른 드리프트 강도 조정 (속도 기반 개선)
+        double base_drift_factor = 0.15 + (speed / 1500.0) + (drift_urgency * 0.15);
         
         // S자 코너나 연속된 급격한 코너에서는 드리프트 강도 조정
         if (is_s_curve) {
@@ -292,26 +312,24 @@ void calculate_drift_target(int current_x, int current_y, int vx, int vy, int sp
             base_drift_factor *= 1.2;
         }
         
-        double drift_factor = base_drift_factor * cp_distance_factor;
+        // 속도에 따른 적응형 드리프트 강도 - 높은 속도에서 더 강한 드리프트
+        double drift_factor = base_drift_factor * cp_distance_factor * (1.0 + (speed / 1000.0) * 0.3);
         
         // 체크포인트에 가까워지면 더 직접적인 접근으로 전환
-        if (dist_to_cp < 1500) {
-            // 가중치 계산 - 거리가 가까울수록 원래 체크포인트에 더 집중
-            double weight_to_cp = 1.0 - (dist_to_cp / 1500.0);
-            weight_to_cp = weight_to_cp * weight_to_cp; // 제곱 적용으로 더 빨리 감소
-            
-            // 접선 각도와 체크포인트 방향 간의 가중치 혼합
-            tangent_angle = tangent_angle * (1 - weight_to_cp * 0.8) + target_dir * (weight_to_cp * 0.8);
-            
-            // S자 코너에 접근할 때는 다음 체크포인트를 향한 각도도 약간 고려
-            if (is_s_curve && dist_to_cp < 1000) {
-                double next_cp_influence = 0.2 * weight_to_cp;
-                tangent_angle = tangent_angle * (1 - next_cp_influence) + cp_to_next_dir * next_cp_influence;
-            }
-            
-            // 거리가 가까울수록 드리프트 강도 감소
-            drift_factor *= (1.0 - weight_to_cp * 0.9);
+        double weight_to_cp = 1.0 - (dist_to_cp / 1500.0);
+        weight_to_cp = weight_to_cp * weight_to_cp; // 제곱 적용으로 더 빨리 감소
+        
+        // 접선 각도와 체크포인트 방향 간의 가중치 혼합
+        tangent_angle = tangent_angle * (1 - weight_to_cp * 0.8) + target_dir * (weight_to_cp * 0.8);
+        
+        // S자 코너에 접근할 때는 다음 체크포인트를 향한 각도도 약간 고려
+        if (is_s_curve && dist_to_cp < 1000) {
+            double next_cp_influence = 0.2 * weight_to_cp;
+            tangent_angle = tangent_angle * (1 - next_cp_influence) + cp_to_next_dir * next_cp_influence;
         }
+        
+        // 거리가 가까울수록 드리프트 강도 감소
+        drift_factor *= (1.0 - weight_to_cp * 0.9);
         
         // 드리프트 거리 계산 및 제한
         double drift_distance = dist_to_cp * drift_factor;
