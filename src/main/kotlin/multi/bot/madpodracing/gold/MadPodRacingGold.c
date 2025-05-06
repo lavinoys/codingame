@@ -17,6 +17,10 @@ int laps;
 bool boost_available = true;
 int shield_cooldown[2] = {0, 0}; // 쉴드가 활성화된 턴 수 카운트
 
+// 쉴드 활성화 중에 사용할 목표 위치 저장
+int shield_target_x[2] = {0, 0};
+int shield_target_y[2] = {0, 0};
+
 // 거리 계산 함수
 double distance(int x1, int y1, int x2, int y2) {
     return sqrt((x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2));
@@ -52,6 +56,18 @@ int main()
         }
         
         for (int i = 0; i < 2; i++) {
+            // 쉴드가 활성화된 경우
+            if (shield_cooldown[i] > 0) {
+                shield_cooldown[i]--;
+                // 3턴 동안 계속해서 SHIELD 명령을 내보냄
+                if (i == 0) {
+                    printf("%d %d SHIELD [RACER] SHIELD\n", shield_target_x[i], shield_target_y[i]);
+                } else {
+                    printf("%d %d SHIELD [BLOCKER] SHIELD\n", shield_target_x[i], shield_target_y[i]);
+                }
+                continue; // 다음 포드로 넘어감
+            }
+            
             // 다음 체크포인트 좌표
             int target_x = checkpoint_x[next_check_point_id[i]];
             int target_y = checkpoint_y[next_check_point_id[i]];
@@ -74,12 +90,15 @@ int main()
                 
                 int thrust = 100;
                 
-                // 쉴드가 활성화된 경우
-                if (shield_cooldown[i] > 0) {
-                    shield_cooldown[i]--;
-                    thrust = 0; // 엔진 사용 불가
-                    printf("%d %d %d [RACER] thrust: %d\n", target_x, target_y, thrust, thrust);
-                    continue;
+                // 회전이 큰 경우 감속
+                double angle_diff = fabs(angle[i] - angle_between(x[i], y[i], target_x, target_y));
+                if (angle_diff > 90) {
+                    thrust = 50;
+                }
+                
+                // 체크포인트에 가까우면 감속
+                if (dist < 600) {
+                    thrust = 60;
                 }
                 
                 // 충돌 감지
@@ -99,21 +118,13 @@ int main()
                     }
                 }
                 
-                // 회전이 큰 경우 감속
-                double angle_diff = fabs(angle[i] - angle_between(x[i], y[i], target_x, target_y));
-                if (angle_diff > 90) {
-                    thrust = 50;
-                }
-                
-                // 체크포인트에 가까우면 감속
-                if (dist < 600) {
-                    thrust = 60;
-                }
-                
                 // 충돌이 임박한 경우 쉴드 사용
                 if (collision_imminent && shield_cooldown[i] == 0) {
-                    printf("%d %d SHIELD [RACER] SHIELD\n", target_x, target_y);
+                    // 쉴드 활성화 시 목표 위치 저장
+                    shield_target_x[i] = target_x;
+                    shield_target_y[i] = target_y;
                     shield_cooldown[i] = 3; // 쉴드 3턴 유지
+                    printf("%d %d SHIELD [RACER] SHIELD\n", target_x, target_y);
                 }
                 // 부스트 사용
                 else if (boost_available && dist > 4000 && angle_diff < 10) {
@@ -130,20 +141,16 @@ int main()
                 int intercept_x = x_op[lead_opponent];
                 int intercept_y = y_op[lead_opponent];
                 
-                // 쉴드가 활성화된 경우
-                if (shield_cooldown[i] > 0) {
-                    shield_cooldown[i]--;
-                    printf("%d %d SHIELD [BLOCKER] SHIELD\n", intercept_x, intercept_y);
-                    continue;
-                }
-                
                 int thrust = 100;
                 double collision_dist = distance(x[i], y[i], x_op[lead_opponent], y_op[lead_opponent]);
                 
                 // 상대방이 가까이 있고 쉴드가 사용 가능하면 쉴드 사용
                 if (collision_dist < 850 && shield_cooldown[i] == 0) {
-                    printf("%d %d SHIELD [BLOCKER] SHIELD\n", intercept_x, intercept_y);
+                    // 쉴드 활성화 시 목표 위치 저장
+                    shield_target_x[i] = intercept_x;
+                    shield_target_y[i] = intercept_y;
                     shield_cooldown[i] = 3; // 쉴드 3턴 유지
+                    printf("%d %d SHIELD [BLOCKER] SHIELD\n", intercept_x, intercept_y);
                 } else {
                     printf("%d %d %d [BLOCKER] thrust: %d\n", intercept_x, intercept_y, thrust, thrust);
                 }
