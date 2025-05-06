@@ -201,6 +201,60 @@ void optimize_racing_line(int current_x, int current_y, int current_vx, int curr
     *target_y = cp_y + (int)(cp_unit_y * offset);
 }
 
+// 드리프트 계산 - 속도와 방향 분석으로 최적 주행점 계산
+void calculate_drift_target(int current_x, int current_y, int vx, int vy, int speed,
+                          int cp_x, int cp_y, int next_cp_x, int next_cp_y,
+                          double angle_diff, double next_angle_diff,
+                          int* target_x, int* target_y) {
+    
+    // 현재 이동 방향과 목표 방향 간의 벡터 계산
+    double movement_dir = atan2(vy, vx) * 180 / PI;
+    double target_dir = angle_between(current_x, current_y, cp_x, cp_y);
+    double dir_diff = min_angle_diff(movement_dir, target_dir);
+    
+    // 현재 체크포인트에서 다음 체크포인트로의 회전 방향 결정
+    double cp_to_next_dir = angle_between(cp_x, cp_y, next_cp_x, next_cp_y);
+    double turn_dir = min_angle_diff(target_dir, cp_to_next_dir);
+    int turn_sign = 1;
+    
+    // 시계 방향 또는 반시계 방향 회전인지 확인
+    double raw_diff = target_dir - cp_to_next_dir;
+    if (raw_diff > 180) raw_diff -= 360;
+    if (raw_diff < -180) raw_diff += 360;
+    turn_sign = raw_diff > 0 ? -1 : 1;
+    
+    // 드리프트 적용 조건
+    bool apply_drift = speed > 350 && next_angle_diff > 50;
+    double dist_to_cp = distance(current_x, current_y, cp_x, cp_y);
+    
+    // 드리프트 계산
+    if (apply_drift && dist_to_cp < 2500) {
+        // 현재 체크포인트를 통과하기 위한 접선 계산
+        double tangent_angle = target_dir + turn_sign * (90 - next_angle_diff/4);
+        double drift_factor = 0.3 + (speed / 1000.0); // 속도에 비례하는 드리프트 강도
+        
+        if (dist_to_cp < 1000) {
+            // 체크포인트에 가까울수록 다음 체크포인트 방향으로 더 많이 조정
+            double blend = 1.0 - (dist_to_cp / 1000.0);
+            tangent_angle = tangent_angle * (1-blend) + cp_to_next_dir * blend;
+        }
+        
+        // 드리프트 각도로 목표 위치 조정
+        double drift_distance = dist_to_cp * drift_factor;
+        drift_distance = drift_distance > 800 ? 800 : drift_distance;
+        
+        *target_x = current_x + (int)(cos(tangent_angle * PI / 180.0) * drift_distance);
+        *target_y = current_y + (int)(sin(tangent_angle * PI / 180.0) * drift_distance);
+        
+        fprintf(stderr, "DRIFT: 속도:%d 각도차:%.1f 드리프트강도:%.2f\n", 
+                speed, next_angle_diff, drift_factor);
+    } else {
+        // 드리프트가 필요 없으면 원래 타겟 사용
+        *target_x = cp_x;
+        *target_y = cp_y;
+    }
+}
+
 int main()
 {
     scanf("%d", &laps);
@@ -264,49 +318,79 @@ int main()
             if (i == 0) { // 레이서 (첫 번째 포드)
                 // 레이싱 라인 최적화
                 optimize_racing_line(x[i], y[i], vx[i], vy[i], 
-                                   target_x, target_y, 
-                                   next_next_x, next_next_y,
-                                   &target_x, &target_y);
-                
+                               target_x, target_y, 
+                               next_next_x, next_next_y,
+                               &target_x, &target_y);
+            
                 // 정교한 추력 계산
                 double target_angle = angle_between(x[i], y[i], target_x, target_y);
                 double angle_diff = min_angle_diff(angle[i], target_angle);
+                int thrust = 100; // 추력 변수 초기화
                 
-                // 회전 각도에 따른 연속적인 추력 조정
-                int thrust = 100;
-                if (angle_diff > 90) {
-                    thrust = 30; // 급격한 회전 시 최소 추력 증가
-                } else if (angle_diff > 0) {
-                    // 0~90도 사이에서 각도에 비례한 추력 (부드러운 감소)
-                    thrust = (int)(100 - angle_diff * 0.7);
-                    thrust = thrust < 30 ? 30 : thrust; // 최소 추력 보장
-                }
-                
-                // 체크포인트 거리에 따른 조정
-                double speed = sqrt(vx[i]*vx[i] + vy[i]*vy[i]);
-                double breaking_distance = speed * 1.5; // 현재 속도에 비례하는 제동 거리
-                
-                if (dist < CHECKPOINT_RADIUS / 2) {
-                    thrust = 50; // 체크포인트 내부에서는 감속
-                } else if (dist < breaking_distance && speed > 400) {
-                    // 제동 거리 이내에서 속도를 줄이되, 속도에 따라 부드럽게 조정
-                    double deceleration_factor = (dist / breaking_distance);
-                    int reduced_thrust = (int)(100 * deceleration_factor * 0.7);
-                    thrust = thrust < reduced_thrust ? thrust : reduced_thrust;
-                }
-                
-                // 급격한 회전 구간 감지 및 조기 감속
+                // 다음 체크포인트로의 방향 전환 각도 계산
                 double next_angle_diff = min_angle_diff(
                     angle_between(target_x, target_y, next_next_x, next_next_y),
                     angle_between(x[i], y[i], target_x, target_y)
                 );
                 
-                // 급회전 구간에서 미리 감속
-                if (next_angle_diff > 80 && dist < 2000) {
-                    thrust = (int)(thrust * (0.5 + 0.5 * (dist / 2000))); // 거리에 따른 점진적 감속
-                    fprintf(stderr, "Reducing speed for sharp turn: %.1f degrees, thrust: %d\n", next_angle_diff, thrust);
-                }
+                // 현재 속도 계산
+                double speed = sqrt(vx[i]*vx[i] + vy[i]*vy[i]);
                 
+                // 드리프트 주행 타겟 계산
+                int drift_target_x, drift_target_y;
+                calculate_drift_target(x[i], y[i], vx[i], vy[i], (int)speed,
+                                      target_x, target_y, next_next_x, next_next_y,
+                                      angle_diff, next_angle_diff,
+                                      &drift_target_x, &drift_target_y);
+                
+                // 급격한 회전이 필요할 때는 드리프트 타겟 사용
+                if (next_angle_diff > 50 && speed > 350) {
+                    target_x = drift_target_x;
+                    target_y = drift_target_y;
+                    
+                    // 드리프트 중 추력 조정 (관성 활용)
+                    double dist_to_cp = distance(x[i], y[i], checkpoint_x[next_check_point_id[i]], checkpoint_y[next_check_point_id[i]]);
+                    if (dist_to_cp < 1200) {
+                        // 체크포인트에 가까울수록 추력 감소
+                        thrust = (int)(70 - (1200 - dist_to_cp) / 20);
+                        thrust = thrust < 30 ? 30 : thrust;
+                    }
+                    
+                    // 드리프트 중 목표 방향 재계산
+                    target_angle = angle_between(x[i], y[i], target_x, target_y);
+                    angle_diff = min_angle_diff(angle[i], target_angle);
+                }
+                else {
+                    // 회전 각도에 따른 연속적인 추력 조정
+                    thrust = 100;
+                    if (angle_diff > 90) {
+                        thrust = 30; // 급격한 회전 시 최소 추력 증가
+                    } else if (angle_diff > 0) {
+                        // 0~90도 사이에서 각도에 비례한 추력 (부드러운 감소)
+                        thrust = (int)(100 - angle_diff * 0.7);
+                        thrust = thrust < 30 ? 30 : thrust; // 최소 추력 보장
+                    }
+                    
+                    // 체크포인트 거리에 따른 조정
+                    double dist = distance(x[i], y[i], target_x, target_y);
+                    double breaking_distance = speed * 1.5; // 현재 속도에 비례하는 제동 거리
+                    
+                    if (dist < CHECKPOINT_RADIUS / 2) {
+                        thrust = 50; // 체크포인트 내부에서는 감속
+                    } else if (dist < breaking_distance && speed > 400) {
+                        // 제동 거리 이내에서 속도를 줄이되, 속도에 따라 부드럽게 조정
+                        double deceleration_factor = (dist / breaking_distance);
+                        int reduced_thrust = (int)(100 * deceleration_factor * 0.7);
+                        thrust = thrust < reduced_thrust ? thrust : reduced_thrust;
+                    }
+                    
+                    // 급격한 회전 구간 감지 및 조기 감속
+                    if (next_angle_diff > 80 && dist < 2000) {
+                        thrust = (int)(thrust * (0.5 + 0.5 * (dist / 2000))); // 거리에 따른 점진적 감속
+                        fprintf(stderr, "Reducing speed for sharp turn: %.1f degrees, thrust: %d\n", next_angle_diff, thrust);
+                    }
+                }
+
                 // 충돌 예측 및 대응
                 bool collision_imminent = false;
                 double collision_time = 0;
