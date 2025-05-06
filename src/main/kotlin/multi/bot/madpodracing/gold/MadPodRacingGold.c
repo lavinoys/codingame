@@ -266,11 +266,11 @@ int calculateThrust(Pod pod, Point target, int podRole, double opponentDist) {
 // 명령 출력 공통 함수 (디버깅 메시지 추가)
 void executeCommand(Point target, int thrust, bool useShield, bool useBoost) {
     if (useShield) {
-        printf("%d %d SHIELD shield:active\n", target.x, target.y);
+        printf("%d %d SHIELD SHIELD\n", target.x, target.y);
     } else if (useBoost) {
-        printf("%d %d BOOST boost:active\n", target.x, target.y);
+        printf("%d %d BOOST BOOST\n", target.x, target.y);
     } else {
-        printf("%d %d %d thrust:%d\n", target.x, target.y, thrust, thrust);
+        printf("%d %d %d thrust: %d\n", target.x, target.y, thrust, thrust);
     }
 }
 
