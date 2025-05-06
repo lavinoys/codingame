@@ -212,6 +212,9 @@ void calculate_drift_target(int current_x, int current_y, int vx, int vy, int sp
     double target_dir = angle_between(current_x, current_y, cp_x, cp_y);
     double dir_diff = min_angle_diff(movement_dir, target_dir);
     
+    // 현재 체크포인트까지의 거리
+    double dist_to_cp = distance(current_x, current_y, cp_x, cp_y);
+    
     // 현재 체크포인트에서 다음 체크포인트로의 회전 방향 결정
     double cp_to_next_dir = angle_between(cp_x, cp_y, next_cp_x, next_cp_y);
     double turn_dir = min_angle_diff(target_dir, cp_to_next_dir);
@@ -223,31 +226,86 @@ void calculate_drift_target(int current_x, int current_y, int vx, int vy, int sp
     if (raw_diff < -180) raw_diff += 360;
     turn_sign = raw_diff > 0 ? -1 : 1;
     
-    // 드리프트 적용 조건
-    bool apply_drift = speed > 350 && next_angle_diff > 50;
-    double dist_to_cp = distance(current_x, current_y, cp_x, cp_y);
+    // 개선된 드리프트 적용 조건
+    // 1. 속도가 충분히 높고 
+    // 2. 다음 턴이 급격하고 (각도 > 50)
+    // 3. 체크포인트에 너무 가깝지 않을 때 (최소 700 이상)
+    // 4. 현재 각도 차이가 크지 않을 때 (30도 이하)
+    bool apply_drift = speed > 350 && 
+                       next_angle_diff > 50 && 
+                       dist_to_cp > CHECKPOINT_RADIUS * 1.2 && 
+                       dist_to_cp > 700 &&
+                       dir_diff < 30;
     
     // 드리프트 계산
     if (apply_drift && dist_to_cp < 2500) {
-        // 현재 체크포인트를 통과하기 위한 접선 계산
-        double tangent_angle = target_dir + turn_sign * (90 - next_angle_diff/4);
-        double drift_factor = 0.3 + (speed / 1000.0); // 속도에 비례하는 드리프트 강도
+        // 체크포인트까지 거리에 따른 드리프트 강도 조절
+        // 체크포인트에 가까울수록 드리프트 효과 감소
+        double cp_distance_factor = fmin(1.0, dist_to_cp / 2000.0);
         
-        if (dist_to_cp < 1000) {
-            // 체크포인트에 가까울수록 다음 체크포인트 방향으로 더 많이 조정
-            double blend = 1.0 - (dist_to_cp / 1000.0);
-            tangent_angle = tangent_angle * (1-blend) + cp_to_next_dir * blend;
+        // 현재 체크포인트를 통과하기 위한 접선 계산 - 각도 조정값 제한
+        // 최대 각도 제한을 45도로 낮춤 (이전 70도에서)
+        double tangent_factor = fmin(45.0, next_angle_diff / 3);
+        double tangent_angle = target_dir + turn_sign * tangent_factor * cp_distance_factor;
+        
+        // 속도와 거리에 비례하는 드리프트 강도 축소
+        double base_drift_factor = 0.15 + (speed / 2000.0);
+        double drift_factor = base_drift_factor * cp_distance_factor;
+        
+        // 체크포인트에 가까워지면 더 직접적인 접근으로 전환
+        if (dist_to_cp < 1500) {
+            // 가중치 계산 - 거리가 가까울수록 원래 체크포인트에 더 집중
+            double weight_to_cp = 1.0 - (dist_to_cp / 1500.0);
+            weight_to_cp = weight_to_cp * weight_to_cp; // 제곱 적용으로 더 빨리 감소
+            
+            // 접선 각도와 체크포인트 방향 간의 가중치 혼합
+            // 체크포인트 방향 가중치 증가 (80%)
+            tangent_angle = tangent_angle * (1 - weight_to_cp * 0.8) + target_dir * (weight_to_cp * 0.8);
+            
+            // 거리가 가까울수록 드리프트 강도 감소 - 더 급격히 감소
+            drift_factor *= (1.0 - weight_to_cp * 0.9);
         }
         
-        // 드리프트 각도로 목표 위치 조정
+        // 드리프트 거리 제한 - 최대 거리 감소 (600 -> 450)
         double drift_distance = dist_to_cp * drift_factor;
-        drift_distance = drift_distance > 800 ? 800 : drift_distance;
+        drift_distance = drift_distance > 450 ? 450 : drift_distance;
         
+        // 체크포인트를 벗어나지 않도록 최소 각도 보장
+        double min_cp_angle = angle_between(current_x, current_y, cp_x, cp_y);
+        double angle_to_cp = min_angle_diff(tangent_angle, min_cp_angle);
+        
+        // 각도 차이가 너무 크면 체크포인트 방향으로 더 맞춤
+        // 각도 제한을 강화 (60 -> 45)
+        if (angle_to_cp > 45) {
+            // 체크포인트 방향으로 더 강하게 조정 (50% -> 70%)
+            tangent_angle = min_cp_angle + (tangent_angle - min_cp_angle) * 0.3;
+        }
+        
+        // 안전장치: 드리프트가 체크포인트와 반대 방향으로 가지 않도록 확인
+        double cp_vector_dot = cos((tangent_angle - min_cp_angle) * PI / 180.0);
+        if (cp_vector_dot < 0.5) {  // 각도가 60도 이상 벌어지면
+            // 드리프트 취소, 체크포인트로 직접 향함
+            *target_x = cp_x;
+            *target_y = cp_y;
+            fprintf(stderr, "DRIFT 취소: 체크포인트와 각도차이 너무 큼\n");
+            return;
+        }
+        
+        // 계산된 드리프트 타겟
         *target_x = current_x + (int)(cos(tangent_angle * PI / 180.0) * drift_distance);
         *target_y = current_y + (int)(sin(tangent_angle * PI / 180.0) * drift_distance);
         
-        fprintf(stderr, "DRIFT: 속도:%d 각도차:%.1f 드리프트강도:%.2f\n", 
-                speed, next_angle_diff, drift_factor);
+        // 계산된 타겟이 현재 체크포인트보다 멀어지지 않도록 확인
+        double new_dist_to_cp = distance(*target_x, *target_y, cp_x, cp_y);
+        if (new_dist_to_cp > dist_to_cp) {
+            // 거리가 늘어나면 드리프트 강도 줄임
+            drift_distance *= 0.6;
+            *target_x = current_x + (int)(cos(tangent_angle * PI / 180.0) * drift_distance);
+            *target_y = current_y + (int)(sin(tangent_angle * PI / 180.0) * drift_distance);
+        }
+        
+        fprintf(stderr, "DRIFT: 속도:%d 각도차:%.1f 드리프트강도:%.2f 거리:%.0f\n", 
+                speed, next_angle_diff, drift_factor, drift_distance);
     } else {
         // 드리프트가 필요 없으면 원래 타겟 사용
         *target_x = cp_x;
