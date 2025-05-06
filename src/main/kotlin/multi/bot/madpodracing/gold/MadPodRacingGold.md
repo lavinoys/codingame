@@ -1,20 +1,16 @@
-# Rule
+# <https://www.codingame.com/multiplayer/bot-programming/mad-pod-racing>
 
-<https://www.codingame.com/multiplayer/bot-programming/mad-pod-racing>
+### What will I learn?
 
-``` text
-What will I learn?
 This puzzle game starts with a step by step tutorial that will help you get familiar with CodinGame’s multiplayer games. It provides an easy introduction to bot programming through a starship race.
-
 The aim of the game is of course to win the race against other players! To succeed in this challenge, you will be able to use different mathematical concepts such as trajectory calculation, collisions, speed vector, or inertia.
-
 The game is very simple to start. Rules are easy to understand and it only requires a few lines of code to move your ship around.
 
 However, it has near-infinite possibilities of evolution as you can improve your artificial intelligence step by step, while sharpening your coding skills.
 
 LEARN ALGORITHMS ASSOCIATED WITH THIS PUZZLE
-Genetic Algorithms by Sablier
 
+Genetic Algorithms by Sablier
 Smitsimax par MSmits
 External resources PID ControllerMulti-agent systemSteering Behaviors (Seek)Neural Network ResourcesGenetic Algorithm post-mortem by MagusGenetic Algorithm post-mortem by Jeff06Genetic Algorithm post-mortem by pb4608
 Learning Opportunities
@@ -26,25 +22,24 @@ Multi-agent
 Distances
 Trigonometry
 Statement
+
 This puzzle is divided into two distinct parts:
 
 From Wood to Silver League: A tutorial containing several missions for newcomers to the multiplayer mode with a simple goal: your program must win the race. You'll unlock new rules at every league.
 
 From Gold league upwards: You will be given a large number of parameters to manage (list of waypoints, vector speed, remaining boosts ...) in order to improve your AI.
-```
 
-## Detail rule
+## Summary of new rules
 
-``` text
-	Summary of new rules
 You now control two pods instead of one. Additionally, you will receive exhaustive game information to create a powerful AI.
-
-
 The i/o protocol has been modified (Pro tip: you can refresh the default code). Please refer to the updated statement section for details.
 
- 	The Goal
-Win the race.
- 	Rules
+## The Goal
+
+### Win the race.
+
+#### Rules
+
 The players each control a team of two pods during a race. As soon as a pod completes the race, that pod's team is declared the winner.
 The circuit of the race is made up of checkpoints. To complete one lap, your vehicle (pod) must pass through each one in order and back through the start. The first player to reach the start on the final lap wins.
 
@@ -67,15 +62,19 @@ If none of your pods make it to their next checkpoint in under 100 turns, you ar
 
 Note: You may activate debug mode in the settings panel () to view additional game data.
  
-Victory Conditions
+#### Victory Conditions
+
 Be the first to complete all the laps of the circuit with one pod.
  
-Lose Conditions
+#### Lose Conditions
+
 Your program provides incorrect output.
 Your program times out.
 None of your pods reach their next checkpoint in time.
 Somebody else wins.
- 	Expert Rules
+
+### Expert Rules
+
 On each turn the pods movements are computed this way:
 Rotation: the pod rotates to face the target point, with a maximum of 18 degrees (except for the 1rst round).
 Acceleration: the pod's facing vector is multiplied by the given thrust value. The result is added to the current speed vector.
@@ -86,10 +85,16 @@ Collisions are elastic. The minimum impulse of a collision is 120.
 A boost is in fact an acceleration of 650. The number of boost available is common between pods. If no boost is available, the maximum thrust is used.
 A shield multiplies the Pod mass by 10.
 The provided angle is absolute. 0° means facing EAST while 90° means facing SOUTH.
- 	Note
+
+### Note
+
 The program must first read the initialization data from standard input. Then, within an infinite loop, read the contextual data from the standard input and provide to the standard output the desired instructions.
- 	Game Input
-Initialization input
+
+
+### Game Input
+
+#### Initialization input
+
 Line 1: laps : the number of laps to complete the race.
 Line 2: checkpointCount : the number of checkpoints in the circuit.
 Next checkpointCount lines : 2 integers checkpointX , checkpointY for the coordinates of checkpoint.
@@ -97,14 +102,17 @@ Input for one game turn
 First 2 lines: Your two pods.
 Next 2 lines: The opponent's pods.
 Each pod is represented by: 6 integers, x & y for the position. vx & vy for the speed vector. angle for the rotation angle in degrees. nextCheckPointId for the number of the next checkpoint the pod must go through.
-Output for one game turn
+
+#### Output for one game turn
+
 Two lines: 2 integers for the target coordinates of your pod followed by thrust , the acceleration to give your pod, or by SHIELD to activate the shields, or by BOOST for an acceleration burst. One line per pod.
-Constraints
+
+### Constraints
+
 0 ≤ thrust ≤ 100
 2 ≤ checkpointCount ≤ 8
 Response time first turn ≤ 1000ms
 Response time per turn ≤ 75ms
-```
 
 ## Log
 
