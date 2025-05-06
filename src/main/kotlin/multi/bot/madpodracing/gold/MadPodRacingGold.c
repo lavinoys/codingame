@@ -297,66 +297,96 @@ float calculateProgress(Pod pod, Checkpoint checkpoints[], int checkpointCount) 
            (2 * CHECKPOINT_RADIUS))) / checkpointCount;
 }
 
-// 속도 기반 추력 계산 함수 (수정: 체크포인트 배열 매개변수 추가)
+// 속도 기반 추력 계산 함수 (수정: 더 정밀한 계산 적용)
 int calculateAdaptiveThrust(Pod pod, float angleDiff, int distToCheckpoint, Checkpoint checkpoints[], int checkpointCount) {
-    // 각도가 커지면 추력을 줄임
+    // 각도가 매우 큰 경우 점진적으로 추력 감소
     if (angleDiff > 90) {
-        return 0;
+        // 90도 초과 시 부드러운 감소 (180도에 가까울수록 더 낮아짐)
+        return fmaxf(0, (int)(-100 * (angleDiff - 90) / 90));
     }
     
-    // 기본 추력 계산 (각도 기반)
-    // 올림 또는 반올림 적용
-    int thrust = (int)(100.0f * cosf(DEG_TO_RAD(angleDiff)) + 0.5f);
+    // 기본 추력 계산 (각도 기반, 코사인 함수 적용)
+    float baseThrust = 100.0f * cosf(DEG_TO_RAD(angleDiff));
     
-    // 현재 속도 벡터의 크기
+    // 현재 속도 벡터의 크기 및 방향
     float currentSpeed = sqrtf(pod.velocity.x * pod.velocity.x + pod.velocity.y * pod.velocity.y);
+    
+    // 목표 지점 방향의 단위 벡터 계산
+    Vector targetPos = checkpoints[pod.nextCheckpointId].position;
+    Vector dirVector = subtract(targetPos, pod.position);
+    float dirLength = sqrtf(dirVector.x * dirVector.x + dirVector.y * dirVector.y);
+    
+    Vector targetDir = normalize(dirVector);
+    Vector velocityDir = normalize(pod.velocity);
+    
+    // 속도 벡터와 목표 방향 벡터의 내적 (방향 일치도, -1.0 ~ 1.0)
+    float directionAlignment = dotProduct(velocityDir, targetDir);
     
     // 체크포인트에 가까워지면 적응형 추력 조절
     if (distToCheckpoint < CHECKPOINT_RADIUS * 3) {
-        // 속도와 거리에 기반한 감속
-        float speedFactor = fminf(currentSpeed / 100.0f, 1.0f); // 속도 요인을 0~1 사이로 제한
-        float distFactor = distToCheckpoint / (CHECKPOINT_RADIUS * 3.0f); // 가까울수록 더 많이 감속
+        // 접근 속도 (속도 벡터의 체크포인트 방향 성분)
+        float approachSpeed = currentSpeed * directionAlignment;
         
-        // 감속 요인 계산 (거리가 가까울수록, 속도가 빠를수록 더 많이 감속)
-        float decelFactor = speedFactor * (1.0f - distFactor);
-        decelFactor = fminf(decelFactor, 1.0f); // 감속 요인을 최대 1.0으로 제한
+        // 안전 정지 거리 계산 (속도에 비례, 현재 감속률 고려)
+        float deceleration = (1.0f - FRICTION) * 100.0f;
+        float stoppingDistance = (approachSpeed * approachSpeed) / (2.0f * deceleration);
         
-        // 추력 감소 적용 (음수 방지)
-        thrust = (int)(thrust * fmaxf(0.3f, 1.0f - decelFactor * 0.7f));
+        // 정밀한 감속 요인 계산
+        float speedRatio = stoppingDistance / (float)distToCheckpoint;
+        float decelFactor = fminf(1.0f, speedRatio * 1.2f); // 안전 마진 20% 추가
         
-        // 최소 추력 보장
-        thrust = thrust < 20 ? 20 : thrust;
+        // 더 정밀한 추력 계산
+        float thrustMultiplier = fmaxf(0.3f, 1.0f - decelFactor * (0.6f + 0.4f * (currentSpeed / 200.0f)));
+        baseThrust *= thrustMultiplier;
+        
+        // 방향이 맞지 않을 때 추가 감속
+        if (directionAlignment < 0.5f) {
+            baseThrust *= (0.5f + directionAlignment);
+        }
+        
+        baseThrust = fmaxf(20.0f, baseThrust);
     }
     // 코너링을 위한 추력 조절 (다음 체크포인트 각도 차이가 큰 경우)
     else if (distToCheckpoint < CHECKPOINT_RADIUS * 5) {
         int nextCpId = (pod.nextCheckpointId + 1) % checkpointCount;
+        Vector currentCp = checkpoints[pod.nextCheckpointId].position;
         Vector nextCp = checkpoints[nextCpId].position;
         
-        // 다음 체크포인트와 현재 체크포인트 사이의 각도 차이 계산
-        float currentAngle = RAD_TO_DEG(angleBetween(pod.position, checkpoints[pod.nextCheckpointId].position));
-        float nextAngle = RAD_TO_DEG(angleBetween(checkpoints[pod.nextCheckpointId].position, nextCp));
-        float turnAngle = fabsf(nextAngle - currentAngle);
-        if (turnAngle > 180) turnAngle = 360 - turnAngle;
+        // 정밀한 각도 계산을 위해 atan2 사용
+        float currentAngle = atan2f(dirVector.y, dirVector.x);
+        float nextAngle = atan2f(nextCp.y - currentCp.y, nextCp.x - currentCp.x);
         
-        // 급격한 회전이 필요한 경우 미리 감속
-        if (turnAngle > 45) {
-            float turnFactor = fminf(turnAngle / 180.0f, 1.0f); // 0.25 ~ 1.0 사이로 제한
-            float distFactor = (distToCheckpoint - CHECKPOINT_RADIUS * 3) / (CHECKPOINT_RADIUS * 2.0f); // 0 ~ 1.0
-            distFactor = fmaxf(0, fminf(1, distFactor));
+        // 각도 차이 계산 (라디안)
+        float angleDiffRad = nextAngle - currentAngle;
+        
+        // 각도 정규화 (-PI ~ PI 범위로)
+        while (angleDiffRad > PI) angleDiffRad -= 2 * PI;
+        while (angleDiffRad < -PI) angleDiffRad += 2 * PI;
+        
+        // 절대 각도 차이를 도(degree)로 변환
+        float turnAngle = fabsf(RAD_TO_DEG(angleDiffRad));
+        
+        // 더 정밀한 코너링 계산
+        if (turnAngle > 30) {
+            // 회전 각도에 따른 감속 요인 (지수 함수 사용으로 더 부드러운 전환)
+            float turnFactor = 1.0f - expf(-turnAngle / 60.0f);
             
-            // 각도와 거리에 따른 감속량 계산 (음수 방지)
-            float deceleration = turnFactor * (1.0f - distFactor);
-            deceleration = fminf(deceleration, 1.0f); // 최대 1.0으로 제한
+            // 속도를 고려한 코너링 거리 조정
+            float corneringStartDist = CHECKPOINT_RADIUS * (3.0f + turnAngle / 36.0f);
+            float distFactor = (distToCheckpoint - CHECKPOINT_RADIUS * 3) / (corneringStartDist - CHECKPOINT_RADIUS * 3);
+            distFactor = fmaxf(0.0f, fminf(1.0f, distFactor));
             
-            // 추력 감소 적용 (음수 방지)
-            thrust = (int)(thrust * fmaxf(0.5f, 1.0f - deceleration * 0.5f));
+            // 속도를 고려한 추가 감속
+            float speedFactor = fminf(1.0f, currentSpeed / 150.0f);
+            float corneringDecel = turnFactor * (1.0f - distFactor) * (0.7f + 0.3f * speedFactor);
+            
+            // 추력 감소 적용
+            baseThrust *= (1.0f - corneringDecel * 0.6f);
         }
     }
     
-    // 최종 추력은 항상 0 이상 100 이하로 보장
-    thrust = fmaxf(0, fminf(100, thrust));
-    
-    return thrust;
+    // 최종 추력은 항상 0 이상 100 이하로 보장 (정밀 반올림 적용)
+    return (int)(fmaxf(0.0f, fminf(100.0f, baseThrust)) + 0.5f);
 }
 
 // 게임 초기화 함수
@@ -468,6 +498,34 @@ PodCommand determinePodStrategy(Pod pod, Pod otherPod, Pod enemies[], GameState*
     
     if (angleDiff > 180) {
         angleDiff = 360 - angleDiff;
+    }
+    
+    // 체크포인트에 가까워졌을 때 다음 체크포인트와의 각도가 크면 외곽을 돌아가도록 수정
+    if (currDist < CHECKPOINT_RADIUS * 2) {
+        int nextCpId = (pod.nextCheckpointId + 1) % state->checkpointCount;
+        Vector currCpPos = state->checkpoints[pod.nextCheckpointId].position;
+        Vector nextCpPos = state->checkpoints[nextCpId].position;
+        
+        float turnAngleRad = angleBetween(currCpPos, nextCpPos) - angleBetween(pod.position, currCpPos);
+        float turnAngleDeg = RAD_TO_DEG(turnAngleRad);
+        
+        // 각도 정규화 (-180 ~ 180)
+        while (turnAngleDeg > 180) turnAngleDeg -= 360;
+        while (turnAngleDeg < -180) turnAngleDeg += 360;
+        
+        if (fabsf(turnAngleDeg) > 90) {
+            // 회전 방향 결정 (시계/반시계)
+            int turnDirection = turnAngleDeg > 0 ? 1 : -1;
+            
+            // 현재 체크포인트에서 90도 방향으로 오프셋 지점 계산
+            float offsetAngle = angleBetween(pod.position, currCpPos) + (PI/2) * turnDirection;
+            Vector offsetPoint;
+            offsetPoint.x = currCpPos.x + (int)(CHECKPOINT_RADIUS * 1.5 * cosf(offsetAngle));
+            offsetPoint.y = currCpPos.y + (int)(CHECKPOINT_RADIUS * 1.5 * sinf(offsetAngle));
+            
+            // 수정된 목표 지점 설정
+            cmd.targetPos = offsetPoint;
+        }
     }
     
     // 각도가 작고 미래 위치가 현재보다 체크포인트에서 더 멀면 드리프트 보상 적용
