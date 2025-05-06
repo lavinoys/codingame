@@ -3,24 +3,27 @@
 #include <string.h>
 #include <stdbool.h>
 
-/**
- * Auto-generated code below aims at helping you parse
- * the standard input according to the problem statement.
- **/
-
 int main()
 {
     int N;
     scanf("%d", &N);
+    
+    int evenSum = 0;  // 짝수의 합
+    int oddSum = 0;   // 홀수의 합
+    
     for (int i = 0; i < N; i++) {
         int M;
         scanf("%d", &M);
+        
+        // 2로 나눈 나머지로 짝수/홀수 판별
+        if (M % 2 == 0) {
+            evenSum += M;  // 짝수인 경우
+        } else {
+            oddSum += M;   // 홀수인 경우
+        }
     }
 
-    // Write an answer using printf(). DON'T FORGET THE TRAILING \n
-    // To debug: fprintf(stderr, "Debug messages...\n");
-
-    printf("answer\n");
+    printf("%d %d\n", evenSum, oddSum);
 
     return 0;
 }
