@@ -114,6 +114,9 @@ bool isCollisionImminent(Pod pod, Pod opponent) {
     return (dist < COLLISION_THRESHOLD && dotProduct < 0);
 }
 
+// BOOST는 모든 Pod 간에 공유되어야 함
+bool globalBoostAvailable = true;
+
 int main()
 {
     int laps;
@@ -133,7 +136,7 @@ int main()
     // 초기화
     for (int i = 0; i < POD_COUNT; i++) {
         myPods[i].shieldCooldown = 0;
-        myPods[i].boostAvailable = true;
+        myPods[i].boostAvailable = false; // 개별 Pod의 boost 플래그는 사용하지 않음
     }
     
     // Pod 역할 설정
@@ -189,12 +192,12 @@ int main()
                 // 스로틀 계산
                 int thrust = calculateThrust(*pod, targetPoint, distToCheckpoint);
                 
-                // BOOST 사용 결정
+                // BOOST 사용 결정 - 전역 변수 사용으로 수정
                 bool useBoost = false;
-                if (pod->boostAvailable && distToCheckpoint > 4000 && 
+                if (globalBoostAvailable && distToCheckpoint > 4000 && 
                     abs(angleDiff(pod->angle, (int)angle(pod->position, targetPoint))) < 10) {
                     useBoost = true;
-                    pod->boostAvailable = false;
+                    globalBoostAvailable = false;
                 }
                 
                 // 충돌 임박 시 SHIELD 사용
