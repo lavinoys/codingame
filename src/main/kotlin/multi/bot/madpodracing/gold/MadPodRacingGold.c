@@ -61,6 +61,18 @@ typedef struct {
     bool firstTurn;
 } GameState;
 
+// PID 컨트롤러 구조체 추가
+typedef struct {
+    float kp;           // 비례 상수
+    float ki;           // 적분 상수
+    float kd;           // 미분 상수
+    float previousError; // 이전 오차
+    float integral;     // 오차 누적값
+    float output;       // 컨트롤러 출력값
+    int maxOutput;      // 최대 출력값 제한
+    int minOutput;      // 최소 출력값 제한
+} PidController;
+
 // 전역 변수 대신 GameState 인스턴스 사용
 GameState gameState;
 
@@ -75,12 +87,15 @@ float dotProduct(Vector a, Vector b);
 Vector closestPointToLine(Vector point, Vector lineStart, Vector lineEnd);
 bool willEnterCheckpointSoon(Pod pod, Checkpoint cp);
 bool isGoingToCollideWith(Pod pod1, Pod pod2);
+Vector predictCollisionWithPid(Pod pod, Pod other, PidController* pid, float deltaTime);
 float collisionNicenessScore(Pod pod, Pod other, Checkpoint target);
 bool shouldEnableShield(Pod pod, Pod myOtherPod, Pod enemies[], Checkpoint checkpoints[], int checkpointCount);
 int calculateThrust(float angleDiff, int distToCheckpoint);
 Vector calculateRacingLine(Pod pod, Checkpoint checkpoints[], int checkpointCount, int lookAhead);
 float calculateProgress(Pod pod, Checkpoint checkpoints[], int checkpointCount);
 int calculateAdaptiveThrust(Pod pod, float angleDiff, int distToCheckpoint, Checkpoint checkpoints[], int checkpointCount);
+PidController initPidController(float kp, float ki, float kd, int minOutput, int maxOutput);
+float updatePidController(PidController* pid, float error, float deltaTime);
 void initializeGame(GameState* state);
 void updateGameState(GameState* state);
 PodCommand determinePodStrategy(Pod pod, Pod otherPod, Pod enemies[], GameState* state, int podIndex);
@@ -161,8 +176,46 @@ bool willEnterCheckpointSoon(Pod pod, Checkpoint cp) {
     return distance(futurePos, cp.position) < CHECKPOINT_RADIUS;
 }
 
-// 충돌 예측
+// PID 컨트롤러 초기화 함수
+PidController initPidController(float kp, float ki, float kd, int minOutput, int maxOutput) {
+    PidController pid;
+    pid.kp = kp;
+    pid.ki = ki;
+    pid.kd = kd;
+    pid.previousError = 0.0f;
+    pid.integral = 0.0f;
+    pid.output = 0.0f;
+    pid.maxOutput = maxOutput;
+    pid.minOutput = minOutput;
+    return pid;
+}
+
+// PID 컨트롤러 업데이트 함수
+float updatePidController(PidController* pid, float error, float deltaTime) {
+    // 비례 항 계산
+    float proportional = pid->kp * error;
+    
+    // 적분 항 계산 (적분 누적 및 와인드업 방지)
+    pid->integral += error * deltaTime;
+    float integral = pid->ki * pid->integral;
+    
+    // 미분 항 계산
+    float derivative = pid->kd * (error - pid->previousError) / deltaTime;
+    pid->previousError = error;
+    
+    // 총 출력값 계산 및 제한
+    pid->output = proportional + integral + derivative;
+    
+    // 출력값 제한
+    if (pid->output > pid->maxOutput) pid->output = pid->maxOutput;
+    if (pid->output < pid->minOutput) pid->output = pid->minOutput;
+    
+    return pid->output;
+}
+
+// 개선된 충돌 예측 함수 (PID 컨트롤러 사용)
 bool isGoingToCollideWith(Pod pod1, Pod pod2) {
+    // 기본 충돌 감지 (현재 코드 유지)
     Vector futurePos1, futurePos2;
     futurePos1.x = pod1.position.x + pod1.velocity.x;
     futurePos1.y = pod1.position.y + pod1.velocity.y;
@@ -170,6 +223,73 @@ bool isGoingToCollideWith(Pod pod1, Pod pod2) {
     futurePos2.y = pod2.position.y + pod2.velocity.y;
     
     return distance(futurePos1, futurePos2) < 2 * POD_RADIUS;
+}
+
+// PID 기반 충돌 예측 및 회피 함수
+Vector predictCollisionWithPid(Pod pod, Pod other, PidController* pid, float deltaTime) {
+    // 현재 거리 계산
+    float currentDist = distance(pod.position, other.position);
+    
+    // 미래 위치에서의 거리 예측 (여러 타임스텝 시뮬레이션)
+    Vector podFuturePos = pod.position;
+    Vector podFutureVel = pod.velocity;
+    Vector otherFuturePos = other.position;
+    Vector otherFutureVel = other.velocity;
+    
+    // 최대 8단계까지 예측
+    bool willCollide = false;
+    int collisionStep = -1;
+    float collisionDist = 0;
+    
+    for (int step = 1; step <= 8; step++) {
+        // 속도 적용 및 마찰 계산
+        podFuturePos.x += podFutureVel.x;
+        podFuturePos.y += podFutureVel.y;
+        podFutureVel.x *= FRICTION;
+        podFutureVel.y *= FRICTION;
+        
+        otherFuturePos.x += otherFutureVel.x;
+        otherFuturePos.y += otherFutureVel.y;
+        otherFutureVel.x *= FRICTION;
+        otherFutureVel.y *= FRICTION;
+        
+        float futureDist = distance(podFuturePos, otherFuturePos);
+        
+        // 충돌 감지
+        if (futureDist < 2 * POD_RADIUS) {
+            willCollide = true;
+            collisionStep = step;
+            collisionDist = futureDist;
+            break;
+        }
+    }
+    
+    // 충돌이 예측되면 PID 컨트롤러를 이용해 회피 동작 계산
+    Vector avoidanceVector = {0, 0};
+    
+    if (willCollide) {
+        // 안전거리를 2.2 * POD_RADIUS로 설정 (약간의 여유)
+        float safeDistance = 2.2f * POD_RADIUS;
+        float error = safeDistance - collisionDist;
+        
+        // PID 컨트롤러로 회피 강도 계산
+        float avoidanceStrength = updatePidController(pid, error, deltaTime);
+        
+        // 회피 방향 계산 (다른 포드로부터 멀어지는 방향)
+        Vector avoidDir = subtract(pod.position, other.position);
+        avoidDir = normalize(avoidDir);
+        
+        // 회피 벡터 계산
+        avoidanceVector.x = (int)(avoidDir.x * avoidanceStrength);
+        avoidanceVector.y = (int)(avoidDir.y * avoidanceStrength);
+        
+        // 충돌까지 시간이 짧을수록 더 강한 회피
+        float urgencyFactor = 1.0f / (collisionStep * 0.5f + 0.5f);
+        avoidanceVector.x = (int)(avoidanceVector.x * urgencyFactor);
+        avoidanceVector.y = (int)(avoidanceVector.y * urgencyFactor);
+    }
+    
+    return avoidanceVector;
 }
 
 // 충돌이 얼마나 유리한지 점수 계산
@@ -574,6 +694,9 @@ int main() {
     // 게임 초기화
     initializeGame(&gameState);
     
+    // PID 컨트롤러 초기화
+    PidController pid = initPidController(0.5f, 0.1f, 0.2f, -100, 100);
+    
     // 게임 루프
     while (1) {
         // 게임 상태 업데이트
@@ -589,6 +712,17 @@ int main() {
                 &gameState, 
                 i
             );
+            
+            // 충돌 예측 및 회피
+            Vector avoidance = predictCollisionWithPid(
+                gameState.myPods[i], 
+                gameState.enemyPods[0], 
+                &pid, 
+                0.1f
+            );
+            
+            // 회피 벡터 적용
+            cmd.targetPos = add(cmd.targetPos, avoidance);
             
             // 쉴드 사용 시 쿨다운 설정
             if (cmd.useShield) {
