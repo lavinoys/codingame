@@ -32,11 +32,24 @@
 #define POD_ROLE_RACER 1
 #define POD_ROLE_DEFENDER 2
 
+// 삼각함수 룩업 테이블을 위한 상수
+#define ANGLE_TABLE_SIZE 360
+#define TO_RADIANS (M_PI / 180.0)
+#define TO_DEGREES (180.0 / M_PI)
+
 // 좌표를 저장하는 구조체
 typedef struct {
     int x;
     int y;
 } Point;
+
+// 벡터 캐싱을 위한 구조체 확장
+typedef struct {
+    double x;
+    double y;
+    double magnitude;  // 벡터 크기
+    double angle;      // 벡터 각도 (라디안)
+} Vector;
 
 // 팟 정보를 저장하는 구조체
 typedef struct {
@@ -46,6 +59,12 @@ typedef struct {
     int nextCheckpointId;
     int shieldCooldown;
     bool isRacer;  // true: 레이서, false: 방어수
+
+    // 캐싱된 계산 값들
+    double speed;                 // 속도 크기
+    double distToNextCheckpoint;  // 다음 체크포인트까지의 거리
+    int angleToNextCheckpoint;    // 다음 체크포인트까지의 각도
+    Vector normalizedVelocity;    // 정규화된 속도 벡터
 } Pod;
 
 // 게임 상태를 저장하는 구조체
@@ -58,17 +77,45 @@ typedef struct {
     bool boostAvailable;
 } GameState;
 
+// 삼각함수 룩업 테이블
+double sin_table[ANGLE_TABLE_SIZE];
+double cos_table[ANGLE_TABLE_SIZE];
+
+// 룩업 테이블 초기화
+void initTrigTables() {
+    for (int i = 0; i < ANGLE_TABLE_SIZE; i++) {
+        double rad = i * TO_RADIANS;
+        sin_table[i] = sin(rad);
+        cos_table[i] = cos(rad);
+    }
+}
+
+// 테이블을 이용한 sin, cos 계산
+double fast_sin(double degrees) {
+    int idx = (int)round(degrees) % ANGLE_TABLE_SIZE;
+    if (idx < 0) idx += ANGLE_TABLE_SIZE;
+    return sin_table[idx];
+}
+
+double fast_cos(double degrees) {
+    int idx = (int)round(degrees) % ANGLE_TABLE_SIZE;
+    if (idx < 0) idx += ANGLE_TABLE_SIZE;
+    return cos_table[idx];
+}
+
 // 유틸리티 함수
 double distanceSquared(Point a, Point b) {
-    return pow(b.x - a.x, 2) + pow(b.y - a.y, 2);
+    return (double)(b.x - a.x) * (b.x - a.x) + (double)(b.y - a.y) * (b.y - a.y);
 }
 
 double distance(Point a, Point b) {
     return sqrt(distanceSquared(a, b));
 }
 
+// 최적화된 각도 계산 함수
 double angle(Point a, Point b) {
-    return atan2(b.y - a.y, b.x - a.x) * 180 / M_PI;
+    double angleRad = atan2(b.y - a.y, b.x - a.x);
+    return angleRad * TO_DEGREES;
 }
 
 // 다음 체크포인트 이후의 체크포인트 ID 계산
@@ -82,23 +129,62 @@ int angleDiff(int a1, int a2) {
     return diff < -180 ? diff + 360 : diff;
 }
 
-// 속도에 따른 최적 선회 반경 계산
-double calculateOptimalTurningRadius(Pod pod) {
-    double speed = sqrt(pod.velocity.x * pod.velocity.x + pod.velocity.y * pod.velocity.y);
-    return 300 + speed * 2;
+// 벡터 정규화 및 캐싱
+Vector normalizeVector(Point vec) {
+    Vector result;
+    double magnitude = sqrt(vec.x * vec.x + vec.y * vec.y);
+    
+    result.x = magnitude > 0 ? vec.x / magnitude : 0;
+    result.y = magnitude > 0 ? vec.y / magnitude : 0;
+    result.magnitude = magnitude;
+    result.angle = atan2(result.y, result.x);
+    
+    return result;
 }
 
-// 레이싱 라인 최적화 - 코너링을 위한 목표 지점 조정
+// Pod의 캐시된 값들 업데이트
+void updatePodCache(Pod *pod, Point nextCheckpoint) {
+    pod->speed = sqrt(pod->velocity.x * pod->velocity.x + pod->velocity.y * pod->velocity.y);
+    Point velPoint = {pod->velocity.x, pod->velocity.y};
+    pod->normalizedVelocity = normalizeVector(velPoint);
+    pod->distToNextCheckpoint = distance(pod->position, nextCheckpoint);
+    pod->angleToNextCheckpoint = (int)angle(pod->position, nextCheckpoint);
+}
+
+// 게임 상태의 모든 Pod에 대해 캐시 업데이트
+void updateAllPodCaches(GameState *gameState) {
+    for (int i = 0; i < POD_COUNT; i++) {
+        Point nextCP = gameState->checkpoints[gameState->myPods[i].nextCheckpointId];
+        updatePodCache(&gameState->myPods[i], nextCP);
+    }
+    
+    for (int i = 0; i < OPPONENT_COUNT; i++) {
+        Point nextCP = gameState->checkpoints[gameState->opponentPods[i].nextCheckpointId];
+        updatePodCache(&gameState->opponentPods[i], nextCP);
+    }
+}
+
+// 최적화된 속도 계산 함수 - 캐시된 값 사용
+double getPodSpeed(Pod pod) {
+    return pod.speed;
+}
+
+// 속도에 따른 최적 선회 반경 계산 - 최적화 버전
+double calculateOptimalTurningRadius(Pod pod) {
+    return 300 + pod.speed * 2;
+}
+
+// 레이싱 라인 최적화 - 코너링을 위한 목표 지점 조정 (최적화 버전)
 Point optimizeRacingLine(GameState *gameState, Pod pod) {
     Point currentCP = gameState->checkpoints[pod.nextCheckpointId];
     int nextCPId = getNextCheckpointId(pod.nextCheckpointId, gameState->checkpointCount);
     Point nextCP = gameState->checkpoints[nextCPId];
     
-    double distToCP = distance(pod.position, currentCP);
+    double distToCP = pod.distToNextCheckpoint;
     
     if (distToCP < CLOSE_CHECKPOINT_DISTANCE) {
         double angleBetweenCPs = angle(currentCP, nextCP);
-        double currentAngleToCP = angle(pod.position, currentCP);
+        double currentAngleToCP = pod.angleToNextCheckpoint;
         double angleDifference = angleDiff((int)currentAngleToCP, (int)angleBetweenCPs);
         
         double turningFactor = abs(angleDifference) / 180.0;
@@ -110,10 +196,10 @@ Point optimizeRacingLine(GameState *gameState, Pod pod) {
         if (ratio > 0.5) ratio = 0.5;
         
         double offsetAngle = angleDifference > 0 ? currentAngleToCP - 90 : currentAngleToCP + 90;
-        offsetAngle = offsetAngle * M_PI / 180.0;
+        double offsetAngleRad = offsetAngle * TO_RADIANS;
         
-        adjusted.x = currentCP.x + cos(offsetAngle) * offsetFactor;
-        adjusted.y = currentCP.y + sin(offsetAngle) * offsetFactor;
+        adjusted.x = currentCP.x + (int)(cos(offsetAngleRad) * offsetFactor);
+        adjusted.y = currentCP.y + (int)(sin(offsetAngleRad) * offsetFactor);
         
         return adjusted;
     }
@@ -121,9 +207,10 @@ Point optimizeRacingLine(GameState *gameState, Pod pod) {
     return currentCP;
 }
 
-// 목표 지점 조정 (속도 벡터와 다음 체크포인트를 고려)
-Point adjustTargetPoint(Pod pod, Point target, double distToCP, GameState *gameState) {
+// 목표 지점 조정 (속도 벡터와 다음 체크포인트를 고려) - 최적화 버전
+Point adjustTargetPoint(Pod pod, Point target, GameState *gameState) {
     Point adjusted = target;
+    double distToCP = pod.distToNextCheckpoint;
     
     if (distToCP < CLOSE_CHECKPOINT_DISTANCE) {
         int nextNextId = getNextCheckpointId(pod.nextCheckpointId, gameState->checkpointCount);
@@ -134,20 +221,19 @@ Point adjustTargetPoint(Pod pod, Point target, double distToCP, GameState *gameS
         adjusted.y = target.y * (1 - blendFactor * 0.3) + nextTarget.y * (blendFactor * 0.3);
     }
     
-    double speed = sqrt(pod.velocity.x * pod.velocity.x + pod.velocity.y * pod.velocity.y);
+    double speed = pod.speed;
     if (speed > 200 && distToCP < CLOSE_CHECKPOINT_DISTANCE) {
         double factor = 1.0 - (distToCP / CLOSE_CHECKPOINT_DISTANCE);
-        adjusted.x -= pod.velocity.x * factor * 3 / speed;
-        adjusted.y -= pod.velocity.y * factor * 3 / speed;
+        adjusted.x -= (int)(pod.normalizedVelocity.x * factor * 3 * speed);
+        adjusted.y -= (int)(pod.normalizedVelocity.y * factor * 3 * speed);
     }
     
     return adjusted;
 }
 
-// 속도와 각도에 따른 스로틀 계산 (일반화된 버전)
-int calculateThrust(Pod pod, Point target, double dist, int podRole, double opponentDist) {
+// 속도와 각도에 따른 스로틀 계산 (최적화 버전)
+int calculateThrust(Pod pod, Point target, int podRole, double opponentDist) {
     int thrust = THRUST_FULL;
-    
     int angleToTarget = (int)angle(pod.position, target);
     int angleDifference = abs(angleDiff(pod.angle, angleToTarget));
     
@@ -157,6 +243,7 @@ int calculateThrust(Pod pod, Point target, double dist, int podRole, double oppo
         thrust = THRUST_LOW;
     } else {
         if (podRole == POD_ROLE_RACER) {
+            double dist = pod.distToNextCheckpoint;
             if (dist < VERY_CLOSE_CHECKPOINT_DISTANCE) {
                 double reduction = 1.0 - (VERY_CLOSE_CHECKPOINT_DISTANCE - dist) / VERY_CLOSE_CHECKPOINT_DISTANCE;
                 thrust = (int)(THRUST_MEDIUM * reduction);
@@ -187,7 +274,7 @@ void executeCommand(Point target, int thrust, bool useShield, bool useBoost) {
     }
 }
 
-// 충돌 예측 및 심각도 계산
+// 충돌 예측 및 심각도 계산 (최적화 버전)
 double predictCollision(Pod pod, Pod opponent, int timeSteps) {
     Point futurePos1 = pod.position;
     Point futurePos2 = opponent.position;
@@ -199,14 +286,14 @@ double predictCollision(Pod pod, Pod opponent, int timeSteps) {
         futurePos2.y += opponent.velocity.y;
     }
     
-    double collisionDist = distance(futurePos1, futurePos2);
-    
-    if (collisionDist < COLLISION_THRESHOLD) {
-        Point relativeVelocity = {
-            pod.velocity.x - opponent.velocity.x,
-            pod.velocity.y - opponent.velocity.y
-        };
-        double speedDiff = sqrt(relativeVelocity.x * relativeVelocity.x + relativeVelocity.y * relativeVelocity.y);
+    double collisionDistSquared = distanceSquared(futurePos1, futurePos2);
+    double thresholdSquared = COLLISION_THRESHOLD * COLLISION_THRESHOLD;
+    if (collisionDistSquared < thresholdSquared) {
+        double collisionDist = sqrt(collisionDistSquared);
+        double speedDiff = sqrt(
+            (pod.velocity.x - opponent.velocity.x) * (pod.velocity.x - opponent.velocity.x) +
+            (pod.velocity.y - opponent.velocity.y) * (pod.velocity.y - opponent.velocity.y)
+        );
         
         return collisionDist - speedDiff * 2;
     }
@@ -214,19 +301,19 @@ double predictCollision(Pod pod, Pod opponent, int timeSteps) {
     return 9999;
 }
 
-// 충돌 회피 전략 결정
+// 충돌 회피 전략 결정 (최적화 버전)
 bool shouldUseShield(Pod pod, Pod opponents[], int opponentCount) {
     if (pod.shieldCooldown > 0) return false;
     
     for (int i = 0; i < opponentCount; i++) {
-        double currentDist = distance(pod.position, opponents[i].position);
+        double currentDistSquared = distanceSquared(pod.position, opponents[i].position);
+        double thresholdSquared = COLLISION_THRESHOLD * COLLISION_THRESHOLD;
         
-        if (currentDist < COLLISION_THRESHOLD) {
-            double speedPod = sqrt(pod.velocity.x * pod.velocity.x + pod.velocity.y * pod.velocity.y);
-            double speedOpponent = sqrt(opponents[i].velocity.x * opponents[i].velocity.x + 
-                                       opponents[i].velocity.y * opponents[i].velocity.y);
+        if (currentDistSquared < thresholdSquared) {
+            double speedPod = pod.speed;
+            double speedOpponent = opponents[i].speed;
             
-            if (speedPod + speedOpponent > 400 && currentDist < 500) {
+            if (speedPod + speedOpponent > 400 && currentDistSquared < 500 * 500) {
                 return true;
             }
         }
@@ -242,20 +329,20 @@ bool shouldUseShield(Pod pod, Pod opponents[], int opponentCount) {
     return false;
 }
 
-// 최적 BOOST 사용 결정
+// 최적 BOOST 사용 결정 (최적화 버전)
 bool shouldUseBoost(GameState *gameState, Pod pod) {
     if (!gameState->boostAvailable) return false;
     
-    int angleToTarget = (int)angle(pod.position, gameState->checkpoints[pod.nextCheckpointId]);
+    int angleToTarget = pod.angleToNextCheckpoint;
     int angleDifference = abs(angleDiff(pod.angle, angleToTarget));
-    double distToCP = distance(pod.position, gameState->checkpoints[pod.nextCheckpointId]);
+    double distToCP = pod.distToNextCheckpoint;
     
     if (distToCP > FAR_CHECKPOINT_DISTANCE && angleDifference < ANGLE_SMALL_THRESHOLD) {
         int nextCPId = getNextCheckpointId(pod.nextCheckpointId, gameState->checkpointCount);
         Point nextCP = gameState->checkpoints[nextCPId];
         
         double angleToNextCP = angle(gameState->checkpoints[pod.nextCheckpointId], nextCP);
-        double angleDiffToNextCP = abs(angleDiff((int)angleToTarget, (int)angleToNextCP));
+        double angleDiffToNextCP = abs(angleDiff(angleToTarget, (int)angleToNextCP));
         
         if (angleDiffToNextCP < 45) {
             return true;
@@ -265,13 +352,13 @@ bool shouldUseBoost(GameState *gameState, Pod pod) {
     return false;
 }
 
-// 어떤 팟이 더 앞서 있는지 비교 (자신의 팟과 상대방 팟 진행상황 비교에도 사용 가능)
+// 어떤 팟이 더 앞서 있는지 비교 (최적화 버전)
 int compareRaceProgress(Pod pod1, Pod pod2, Point checkpoints[], int checkpointCount) {
     int progress1 = pod1.nextCheckpointId * 10000;
     int progress2 = pod2.nextCheckpointId * 10000;
     
-    double distToNextCP1 = distance(pod1.position, checkpoints[pod1.nextCheckpointId]);
-    double distToNextCP2 = distance(pod2.position, checkpoints[pod2.nextCheckpointId]);
+    double distToNextCP1 = pod1.distToNextCheckpoint;
+    double distToNextCP2 = pod2.distToNextCheckpoint;
     
     progress1 -= (int)distToNextCP1;
     progress2 -= (int)distToNextCP2;
@@ -306,15 +393,15 @@ void determineRoles(GameState *gameState) {
     }
 }
 
-// 레이서 팟 제어 함수
+// 레이서 팟 제어 함수 (최적화 버전)
 void controlRacerPod(GameState *gameState, Pod *pod, int podIndex) {
     Point targetCheckpoint = gameState->checkpoints[pod->nextCheckpointId];
-    double distToCheckpoint = distance(pod->position, targetCheckpoint);
+    double distToCheckpoint = pod->distToNextCheckpoint;
     
     Point racingTarget = optimizeRacingLine(gameState, *pod);
-    Point adjustedTarget = adjustTargetPoint(*pod, racingTarget, distToCheckpoint, gameState);
+    Point adjustedTarget = adjustTargetPoint(*pod, racingTarget, gameState);
     
-    int thrust = calculateThrust(*pod, adjustedTarget, distToCheckpoint, POD_ROLE_RACER, 0);
+    int thrust = calculateThrust(*pod, adjustedTarget, POD_ROLE_RACER, 0);
     
     bool useBoost = shouldUseBoost(gameState, *pod);
     if (useBoost) {
@@ -329,7 +416,7 @@ void controlRacerPod(GameState *gameState, Pod *pod, int podIndex) {
     executeCommand(adjustedTarget, thrust, useShield, useBoost);
 }
 
-// 상대방 리더 팟 식별 (가장 앞선 팟 찾기)
+// 상대방 리더 팟 식별 (최적화 버전)
 int findOpponentLeader(GameState *gameState) {
     int leader = 0;
     int maxProgress = -99999;
@@ -352,14 +439,14 @@ int findOpponentLeader(GameState *gameState) {
     return leader;
 }
 
-// 방어수 팟 제어 함수
+// 방어수 팟 제어 함수 (최적화 버전)
 void controlDefenderPod(GameState *gameState, Pod *pod, int podIndex) {
     int leaderIndex = findOpponentLeader(gameState);
     Pod opponentLeader = gameState->opponentPods[leaderIndex];
     
     Point opponentTarget = gameState->checkpoints[opponentLeader.nextCheckpointId];
     Point interceptPoint;
-    double distOpponentToCP = distance(opponentLeader.position, opponentTarget);
+    double distOpponentToCP = opponentLeader.distToNextCheckpoint;
     
     if (distOpponentToCP < CLOSE_CHECKPOINT_DISTANCE) {
         double ratio = 0.3;
@@ -367,15 +454,8 @@ void controlDefenderPod(GameState *gameState, Pod *pod, int podIndex) {
         interceptPoint.y = opponentLeader.position.y * (1-ratio) + opponentTarget.y * ratio;
     } else {
         double timeToIntercept = 2.0;
-        interceptPoint.x = opponentLeader.position.x + opponentLeader.velocity.x * timeToIntercept;
-        interceptPoint.y = opponentLeader.position.y + opponentLeader.velocity.y * timeToIntercept;
-        
-        double distToCP = distance(interceptPoint, opponentTarget);
-        if (distToCP < CLOSE_CHECKPOINT_DISTANCE) {
-            double ratio = 0.3;
-            interceptPoint.x = interceptPoint.x * (1-ratio) + opponentTarget.x * ratio;
-            interceptPoint.y = interceptPoint.y * (1-ratio) + opponentTarget.y * ratio;
-        }
+        interceptPoint.x = opponentLeader.position.x + (int)(opponentLeader.velocity.x * timeToIntercept);
+        interceptPoint.y = opponentLeader.position.y + (int)(opponentLeader.velocity.y * timeToIntercept);
     }
     
     double distToOpponent = distance(pod->position, opponentLeader.position);
@@ -385,13 +465,15 @@ void controlDefenderPod(GameState *gameState, Pod *pod, int podIndex) {
         pod->shieldCooldown = SHIELD_DURATION;
     }
     
-    int thrust = calculateThrust(*pod, interceptPoint, 0, POD_ROLE_DEFENDER, distToOpponent);
+    int thrust = calculateThrust(*pod, interceptPoint, POD_ROLE_DEFENDER, distToOpponent);
     
     executeCommand(interceptPoint, thrust, useShield, false);
 }
 
 int main()
 {
+    initTrigTables();
+    
     GameState gameState;
     gameState.boostAvailable = true;
     
@@ -404,6 +486,7 @@ int main()
     
     for (int i = 0; i < POD_COUNT; i++) {
         gameState.myPods[i].shieldCooldown = 0;
+        gameState.myPods[i].speed = 0;
     }
     
     gameState.myPods[0].isRacer = true;
@@ -427,6 +510,8 @@ int main()
                 &gameState.opponentPods[i].velocity.x, &gameState.opponentPods[i].velocity.y, 
                 &gameState.opponentPods[i].angle, &gameState.opponentPods[i].nextCheckpointId);
         }
+        
+        updateAllPodCaches(&gameState);
         
         determineRoles(&gameState);
         
