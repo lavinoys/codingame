@@ -61,6 +61,16 @@ The pods may move normally outside the game area.
 If none of your pods make it to their next checkpoint in under 100 turns, you are eliminated and lose the game. Only one pod need to complete the race.
 
 Note: You may activate debug mode in the settings panel () to view additional game data.
+
+쉴드는 3턴간 유지해야 유의미하다.
+
+example
+
+``` text
+x y shield
+x y shield
+x y shield
+```
  
 #### Victory Conditions
 
