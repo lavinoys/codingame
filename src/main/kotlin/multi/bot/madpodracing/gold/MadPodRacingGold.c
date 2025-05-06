@@ -227,47 +227,38 @@ int main()
                     opponentLeader = opponentPods[1];
                 }
                 
-                // 자신의 체크포인트에 더 가까운 경우 레이서 역할 수행
-                if (distToCheckpoint < 3000) {
-                    targetPoint = adjustTargetPoint(*pod, targetPoint, distToCheckpoint);
-                    int thrust = calculateThrust(*pod, targetPoint, distToCheckpoint);
-                    printf("%d %d %d\n", targetPoint.x, targetPoint.y, thrust);
-                } 
-                // 상대 방해 전략
-                else {
-                    // 상대 목표 지점
-                    Point interceptPoint = opponentLeader.position;
-                    
-                    // 상대 속도 벡터를 고려하여 요격 지점 계산
-                    interceptPoint.x += opponentLeader.velocity.x * 2;
-                    interceptPoint.y += opponentLeader.velocity.y * 2;
-                    
-                    double distToOpponent = distance(pod->position, opponentLeader.position);
-                    
-                    // 충돌 임박 시 SHIELD 사용
-                    if (distToOpponent < COLLISION_THRESHOLD && pod->shieldCooldown == 0) {
-                        printf("%d %d SHIELD\n", interceptPoint.x, interceptPoint.y);
-                        pod->shieldCooldown = SHIELD_DURATION;
-                    } else {
-                        int thrust = 100;
-                        
-                        // 각도 차이가 크면 스로틀 조절
-                        int angleToTarget = (int)angle(pod->position, interceptPoint);
-                        int angleDifference = abs(angleDiff(pod->angle, angleToTarget));
-                        
-                        if (angleDifference > 90) {
-                            thrust = 0;
-                        } else if (angleDifference > 45) {
-                            thrust = 50;
-                        }
-                        
-                        // 쉴드 쿨다운 중이면 가속 불가
-                        if (pod->shieldCooldown > 0) {
-                            thrust = 0;
-                        }
-                        
-                        printf("%d %d %d\n", interceptPoint.x, interceptPoint.y, thrust);
+                // 상대 목표 지점
+                Point interceptPoint = opponentLeader.position;
+
+                // 상대 속도 벡터를 고려하여 요격 지점 계산
+                interceptPoint.x += opponentLeader.velocity.x * 2;
+                interceptPoint.y += opponentLeader.velocity.y * 2;
+
+                double distToOpponent = distance(pod->position, opponentLeader.position);
+
+                // 충돌 임박 시 SHIELD 사용
+                if (distToOpponent < COLLISION_THRESHOLD && pod->shieldCooldown == 0) {
+                    printf("%d %d SHIELD\n", interceptPoint.x, interceptPoint.y);
+                    pod->shieldCooldown = SHIELD_DURATION;
+                } else {
+                    int thrust = 100;
+
+                    // 각도 차이가 크면 스로틀 조절
+                    int angleToTarget = (int)angle(pod->position, interceptPoint);
+                    int angleDifference = abs(angleDiff(pod->angle, angleToTarget));
+
+                    if (angleDifference > 90) {
+                        thrust = 0;
+                    } else if (angleDifference > 45) {
+                        thrust = 50;
                     }
+
+                    // 쉴드 쿨다운 중이면 가속 불가
+                    if (pod->shieldCooldown > 0) {
+                        thrust = 0;
+                    }
+
+                    printf("%d %d %d\n", interceptPoint.x, interceptPoint.y, thrust);
                 }
             }
         }
