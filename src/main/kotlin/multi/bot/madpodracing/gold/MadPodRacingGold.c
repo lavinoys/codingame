@@ -264,13 +264,15 @@ int calculateThrust(Pod pod, Point target, int podRole, double opponentDist) {
 }
 
 // 명령 출력 공통 함수 (디버깅 메시지 추가)
-void executeCommand(Point target, int thrust, bool useShield, bool useBoost) {
+void executeCommand(Point target, int thrust, bool useShield, bool useBoost, int podIndex, bool isRacer) {
+    const char* role = isRacer ? "RACER" : "BLOCKER";
+    
     if (useShield) {
-        printf("%d %d SHIELD SHIELD\n", target.x, target.y);
+        printf("%d %d SHIELD [Pod %d: %s] SHIELD\n", target.x, target.y, podIndex, role);
     } else if (useBoost) {
-        printf("%d %d BOOST BOOST\n", target.x, target.y);
+        printf("%d %d BOOST [Pod %d: %s] BOOST\n", target.x, target.y, podIndex, role);
     } else {
-        printf("%d %d %d thrust: %d\n", target.x, target.y, thrust, thrust);
+        printf("%d %d %d [Pod %d: %s] thrust: %d\n", target.x, target.y, thrust, podIndex, role, thrust);
     }
 }
 
@@ -413,7 +415,7 @@ void controlRacerPod(GameState *gameState, Pod *pod, int podIndex) {
         pod->shieldCooldown = SHIELD_DURATION;
     }
     
-    executeCommand(adjustedTarget, thrust, useShield, useBoost);
+    executeCommand(adjustedTarget, thrust, useShield, useBoost, podIndex, true);
 }
 
 // 상대방 리더 팟 식별 (최적화 버전)
@@ -467,7 +469,7 @@ void controlDefenderPod(GameState *gameState, Pod *pod, int podIndex) {
     
     int thrust = calculateThrust(*pod, interceptPoint, POD_ROLE_DEFENDER, distToOpponent);
     
-    executeCommand(interceptPoint, thrust, useShield, false);
+    executeCommand(interceptPoint, thrust, useShield, false, podIndex, false);
 }
 
 int main()
