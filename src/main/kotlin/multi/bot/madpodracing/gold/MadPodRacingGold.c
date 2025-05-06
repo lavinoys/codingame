@@ -78,7 +78,7 @@ int main()
                 if (shield_cooldown[i] > 0) {
                     shield_cooldown[i]--;
                     thrust = 0; // 엔진 사용 불가
-                    printf("%d %d %d\n", target_x, target_y, thrust);
+                    printf("%d %d %d [RACER] thrust: %d\n", target_x, target_y, thrust, thrust);
                     continue;
                 }
                 
@@ -112,16 +112,16 @@ int main()
                 
                 // 충돌이 임박한 경우 쉴드 사용
                 if (collision_imminent && shield_cooldown[i] == 0) {
-                    printf("%d %d SHIELD\n", target_x, target_y);
+                    printf("%d %d SHIELD [RACER] SHIELD\n", target_x, target_y);
                     shield_cooldown[i] = 3; // 쉴드 3턴 유지
                 }
                 // 부스트 사용
                 else if (boost_available && dist > 4000 && angle_diff < 10) {
-                    printf("%d %d BOOST\n", target_x, target_y);
+                    printf("%d %d BOOST [RACER] BOOST\n", target_x, target_y);
                     boost_available = false;
                 }
                 else {
-                    printf("%d %d %d\n", target_x, target_y, thrust);
+                    printf("%d %d %d [RACER] thrust: %d\n", target_x, target_y, thrust, thrust);
                 }
             }
             else { // 블로커 (두 번째 포드)
@@ -133,7 +133,7 @@ int main()
                 // 쉴드가 활성화된 경우
                 if (shield_cooldown[i] > 0) {
                     shield_cooldown[i]--;
-                    printf("%d %d 0\n", intercept_x, intercept_y);
+                    printf("%d %d SHIELD [BLOCKER] SHIELD\n", intercept_x, intercept_y);
                     continue;
                 }
                 
@@ -142,10 +142,10 @@ int main()
                 
                 // 상대방이 가까이 있고 쉴드가 사용 가능하면 쉴드 사용
                 if (collision_dist < 850 && shield_cooldown[i] == 0) {
-                    printf("%d %d SHIELD\n", intercept_x, intercept_y);
+                    printf("%d %d SHIELD [BLOCKER] SHIELD\n", intercept_x, intercept_y);
                     shield_cooldown[i] = 3; // 쉴드 3턴 유지
                 } else {
-                    printf("%d %d %d\n", intercept_x, intercept_y, thrust);
+                    printf("%d %d %d [BLOCKER] thrust: %d\n", intercept_x, intercept_y, thrust, thrust);
                 }
             }
         }
