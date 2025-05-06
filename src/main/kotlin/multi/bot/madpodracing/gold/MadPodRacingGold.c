@@ -32,14 +32,37 @@ typedef struct {
     int radius;
 } Checkpoint;
 
-// 게임 상태 변수들
-int laps;
-int checkpointCount;
-Checkpoint checkpoints[MAX_CHECKPOINTS];
-Pod myPods[2];
-Pod enemyPods[2];
-int totalCheckpoints; // 총 체크포인트 수 (laps * checkpointCount)
-int longestStretch = 0; // 가장 긴 체크포인트 간 거리
+// 포드 정보 추가 구조체
+typedef struct {
+    float progress;    // 레이스 진행도
+    Vector racingLine; // 최적 레이싱 라인 목표점
+} PodInfo;
+
+// 포드 명령어 구조체 추가
+typedef struct {
+    Vector targetPos;
+    int thrust;
+    bool useShield;
+    bool useBoost;
+    int podId;
+} PodCommand;
+
+// 게임 상태 구조체 추가
+typedef struct {
+    int laps;
+    int checkpointCount;
+    Checkpoint checkpoints[MAX_CHECKPOINTS];
+    Pod myPods[2];
+    Pod enemyPods[2];
+    PodInfo myPodsInfo[2];
+    float enemyProgress[2];
+    int totalCheckpoints;
+    int longestStretch;
+    bool firstTurn;
+} GameState;
+
+// 전역 변수 대신 GameState 인스턴스 사용
+GameState gameState;
 
 // 함수 선언부
 float distance(Vector a, Vector b);
@@ -53,8 +76,15 @@ Vector closestPointToLine(Vector point, Vector lineStart, Vector lineEnd);
 bool willEnterCheckpointSoon(Pod pod, Checkpoint cp);
 bool isGoingToCollideWith(Pod pod1, Pod pod2);
 float collisionNicenessScore(Pod pod, Pod other, Checkpoint target);
-bool shouldEnableShield(Pod pod, Pod myOtherPod, Pod enemies[]);
+bool shouldEnableShield(Pod pod, Pod myOtherPod, Pod enemies[], Checkpoint checkpoints[], int checkpointCount);
 int calculateThrust(float angleDiff, int distToCheckpoint);
+Vector calculateRacingLine(Pod pod, Checkpoint checkpoints[], int checkpointCount, int lookAhead);
+float calculateProgress(Pod pod, Checkpoint checkpoints[], int checkpointCount);
+int calculateAdaptiveThrust(Pod pod, float angleDiff, int distToCheckpoint, Checkpoint checkpoints[], int checkpointCount);
+void initializeGame(GameState* state);
+void updateGameState(GameState* state);
+PodCommand determinePodStrategy(Pod pod, Pod otherPod, Pod enemies[], GameState* state, int podIndex);
+void executePodCommand(PodCommand cmd);
 
 // 거리 계산 함수
 float distance(Vector a, Vector b) {
@@ -164,8 +194,8 @@ float collisionNicenessScore(Pod pod, Pod other, Checkpoint target) {
     return baseDistance - newDistance;
 }
 
-// 쉴드 사용 여부 결정
-bool shouldEnableShield(Pod pod, Pod myOtherPod, Pod enemies[]) {
+// 쉴드 사용 여부 결정 함수 (수정: 체크포인트 배열 매개변수 추가)
+bool shouldEnableShield(Pod pod, Pod myOtherPod, Pod enemies[], Checkpoint checkpoints[], int checkpointCount) {
     // 쉴드 쿨다운 중이면 사용 불가
     if (pod.shieldCooldown > 0) {
         return false;
@@ -211,167 +241,312 @@ int calculateThrust(float angleDiff, int distToCheckpoint) {
     return thrust;
 }
 
-// 메인 함수
-int main() {
-    // 초기화 입력 처리
-    scanf("%d", &laps);
-    scanf("%d", &checkpointCount);
+// 레이싱 라인 계산 함수 (수정: 체크포인트 배열 매개변수 추가)
+Vector calculateRacingLine(Pod pod, Checkpoint checkpoints[], int checkpointCount, int lookAhead) {
+    Vector result = checkpoints[pod.nextCheckpointId].position;
     
-    totalCheckpoints = laps * checkpointCount;
+    // 앞의 여러 체크포인트를 고려하여 레이싱 라인 계산
+    if (lookAhead > 0) {
+        Vector nextPoints[3]; // 최대 3개 체크포인트 고려
+        float weights[3] = {0.7, 0.2, 0.1}; // 가중치
+        
+        // 다음 체크포인트들의 위치 저장
+        for (int i = 0; i < lookAhead && i < 3; i++) {
+            int cpIndex = (pod.nextCheckpointId + i) % checkpointCount;
+            nextPoints[i] = checkpoints[cpIndex].position;
+        }
+        
+        // 가중 평균 계산으로 체크포인트 사이를 부드럽게 이동
+        Vector blended = {0, 0};
+        float totalWeight = 0;
+        
+        for (int i = 0; i < lookAhead && i < 3; i++) {
+            blended.x += nextPoints[i].x * weights[i];
+            blended.y += nextPoints[i].y * weights[i];
+            totalWeight += weights[i];
+        }
+        
+        // 정규화
+        if (totalWeight > 0) {
+            blended.x /= totalWeight;
+            blended.y /= totalWeight;
+        }
+        
+        // 현재 체크포인트에서 조금 벗어난 지점을 목표로
+        Vector dirToCP = subtract(checkpoints[pod.nextCheckpointId].position, pod.position);
+        float distToCP = sqrtf(dirToCP.x * dirToCP.x + dirToCP.y * dirToCP.y);
+        
+        // 체크포인트에 접근함에 따라 앞의 체크포인트 영향력 증가
+        float blendFactor;
+        if (distToCP < CHECKPOINT_RADIUS * 3) {
+            blendFactor = 0.5 - 0.5 * (distToCP / (CHECKPOINT_RADIUS * 3));
+            
+            // 목표 지점 조정
+            result.x = (int)((1 - blendFactor) * result.x + blendFactor * blended.x);
+            result.y = (int)((1 - blendFactor) * result.y + blendFactor * blended.y);
+        }
+    }
+    
+    return result;
+}
+
+// 포드 진행상황 계산 (수정: 체크포인트 배열 매개변수 추가)
+float calculateProgress(Pod pod, Checkpoint checkpoints[], int checkpointCount) {
+    return pod.checkpointsPassed + 
+           (1.0f - fminf(1.0f, distance(pod.position, checkpoints[pod.nextCheckpointId].position) / 
+           (2 * CHECKPOINT_RADIUS))) / checkpointCount;
+}
+
+// 속도 기반 추력 계산 함수 (수정: 체크포인트 배열 매개변수 추가)
+int calculateAdaptiveThrust(Pod pod, float angleDiff, int distToCheckpoint, Checkpoint checkpoints[], int checkpointCount) {
+    // 각도가 커지면 추력을 줄임
+    if (angleDiff > 90) {
+        return 0;
+    }
+    
+    // 기본 추력 계산 (각도 기반)
+    // 올림 또는 반올림 적용
+    int thrust = (int)(100.0f * cosf(DEG_TO_RAD(angleDiff)) + 0.5f);
+    
+    // 현재 속도 벡터의 크기
+    float currentSpeed = sqrtf(pod.velocity.x * pod.velocity.x + pod.velocity.y * pod.velocity.y);
+    
+    // 체크포인트에 가까워지면 적응형 추력 조절
+    if (distToCheckpoint < CHECKPOINT_RADIUS * 3) {
+        // 속도와 거리에 기반한 감속
+        float speedFactor = fminf(currentSpeed / 100.0f, 1.0f); // 속도 요인을 0~1 사이로 제한
+        float distFactor = distToCheckpoint / (CHECKPOINT_RADIUS * 3.0f); // 가까울수록 더 많이 감속
+        
+        // 감속 요인 계산 (거리가 가까울수록, 속도가 빠를수록 더 많이 감속)
+        float decelFactor = speedFactor * (1.0f - distFactor);
+        decelFactor = fminf(decelFactor, 1.0f); // 감속 요인을 최대 1.0으로 제한
+        
+        // 추력 감소 적용 (음수 방지)
+        thrust = (int)(thrust * fmaxf(0.3f, 1.0f - decelFactor * 0.7f));
+        
+        // 최소 추력 보장
+        thrust = thrust < 20 ? 20 : thrust;
+    }
+    // 코너링을 위한 추력 조절 (다음 체크포인트 각도 차이가 큰 경우)
+    else if (distToCheckpoint < CHECKPOINT_RADIUS * 5) {
+        int nextCpId = (pod.nextCheckpointId + 1) % checkpointCount;
+        Vector nextCp = checkpoints[nextCpId].position;
+        
+        // 다음 체크포인트와 현재 체크포인트 사이의 각도 차이 계산
+        float currentAngle = RAD_TO_DEG(angleBetween(pod.position, checkpoints[pod.nextCheckpointId].position));
+        float nextAngle = RAD_TO_DEG(angleBetween(checkpoints[pod.nextCheckpointId].position, nextCp));
+        float turnAngle = fabsf(nextAngle - currentAngle);
+        if (turnAngle > 180) turnAngle = 360 - turnAngle;
+        
+        // 급격한 회전이 필요한 경우 미리 감속
+        if (turnAngle > 45) {
+            float turnFactor = fminf(turnAngle / 180.0f, 1.0f); // 0.25 ~ 1.0 사이로 제한
+            float distFactor = (distToCheckpoint - CHECKPOINT_RADIUS * 3) / (CHECKPOINT_RADIUS * 2.0f); // 0 ~ 1.0
+            distFactor = fmaxf(0, fminf(1, distFactor));
+            
+            // 각도와 거리에 따른 감속량 계산 (음수 방지)
+            float deceleration = turnFactor * (1.0f - distFactor);
+            deceleration = fminf(deceleration, 1.0f); // 최대 1.0으로 제한
+            
+            // 추력 감소 적용 (음수 방지)
+            thrust = (int)(thrust * fmaxf(0.5f, 1.0f - deceleration * 0.5f));
+        }
+    }
+    
+    // 최종 추력은 항상 0 이상 100 이하로 보장
+    thrust = fmaxf(0, fminf(100, thrust));
+    
+    return thrust;
+}
+
+// 게임 초기화 함수
+void initializeGame(GameState* state) {
+    // 초기화 입력 처리
+    scanf("%d", &state->laps);
+    scanf("%d", &state->checkpointCount);
+    
+    state->totalCheckpoints = state->laps * state->checkpointCount;
+    state->firstTurn = true;
     
     // 체크포인트 정보 저장
-    for (int i = 0; i < checkpointCount; i++) {
-        scanf("%d%d", &checkpoints[i].position.x, &checkpoints[i].position.y);
-        checkpoints[i].radius = CHECKPOINT_RADIUS;
+    for (int i = 0; i < state->checkpointCount; i++) {
+        scanf("%d%d", &state->checkpoints[i].position.x, &state->checkpoints[i].position.y);
+        state->checkpoints[i].radius = CHECKPOINT_RADIUS;
     }
     
     // 가장 긴 체크포인트 간 거리 계산
-    for (int i = 0; i < checkpointCount; i++) {
-        int nextIdx = (i + 1) % checkpointCount;
-        float dist = distance(checkpoints[i].position, checkpoints[nextIdx].position);
-        if (dist > longestStretch) {
-            longestStretch = (int)dist;
+    state->longestStretch = 0;
+    for (int i = 0; i < state->checkpointCount; i++) {
+        int nextIdx = (i + 1) % state->checkpointCount;
+        float dist = distance(state->checkpoints[i].position, state->checkpoints[nextIdx].position);
+        if (dist > state->longestStretch) {
+            state->longestStretch = (int)dist;
         }
     }
     
     // 포드 초기화
     for (int i = 0; i < 2; i++) {
-        myPods[i].boostAvailable = true;
-        myPods[i].shieldCooldown = 0;
-        myPods[i].checkpointsPassed = 0;
+        state->myPods[i].boostAvailable = true;
+        state->myPods[i].shieldCooldown = 0;
+        state->myPods[i].checkpointsPassed = 0;
+    }
+}
+
+// 게임 상태 업데이트 함수
+void updateGameState(GameState* state) {
+    // 내 포드 정보 입력
+    for (int i = 0; i < 2; i++) {
+        int x, y, vx, vy, angle, nextCheckPointId;
+        scanf("%d%d%d%d%d%d", &x, &y, &vx, &vy, &angle, &nextCheckPointId);
+        
+        // 체크포인트를 통과했는지 확인
+        if (state->myPods[i].nextCheckpointId != nextCheckPointId && !state->firstTurn) {
+            state->myPods[i].checkpointsPassed++;
+        }
+        
+        state->myPods[i].position.x = x;
+        state->myPods[i].position.y = y;
+        state->myPods[i].velocity.x = vx;
+        state->myPods[i].velocity.y = vy;
+        state->myPods[i].angle = angle;
+        state->myPods[i].nextCheckpointId = nextCheckPointId;
+        
+        // 쉴드 쿨다운 감소
+        if (state->myPods[i].shieldCooldown > 0) {
+            state->myPods[i].shieldCooldown--;
+        }
+        
+        // 진행 상황 계산
+        state->myPodsInfo[i].progress = calculateProgress(
+            state->myPods[i], 
+            state->checkpoints, 
+            state->checkpointCount
+        );
     }
     
-    // 게임 루프
-    bool firstTurn = true;
+    // 적 포드 정보 입력 및 진행 상황 계산
+    for (int i = 0; i < 2; i++) {
+        scanf("%d%d%d%d%d%d", 
+              &state->enemyPods[i].position.x, &state->enemyPods[i].position.y,
+              &state->enemyPods[i].velocity.x, &state->enemyPods[i].velocity.y,
+              &state->enemyPods[i].angle, &state->enemyPods[i].nextCheckpointId);
+              
+        // 적 진행 상황 계산
+        state->enemyProgress[i] = calculateProgress(
+            state->enemyPods[i], 
+            state->checkpoints, 
+            state->checkpointCount
+        );
+    }
+}
+
+// 포드 전략 결정 함수
+PodCommand determinePodStrategy(Pod pod, Pod otherPod, Pod enemies[], GameState* state, int podIndex) {
+    PodCommand cmd;
+    cmd.podId = podIndex;
+    cmd.useShield = false;
+    cmd.useBoost = false;
     
+    Checkpoint targetCP = state->checkpoints[pod.nextCheckpointId];
+    
+    // 최적의 레이싱 라인 계산
+    int lookAhead = 2; // 앞의 2개 체크포인트까지 고려
+    cmd.targetPos = calculateRacingLine(pod, state->checkpoints, state->checkpointCount, lookAhead);
+    
+    // 원치 않는 드리프트 보상
+    Vector futurePos;
+    futurePos.x = pod.position.x + pod.velocity.x;
+    futurePos.y = pod.position.y + pod.velocity.y;
+    
+    float currDist = distance(pod.position, targetCP.position);
+    float futureDist = distance(futurePos, targetCP.position);
+    
+    // 각도 차이 계산
+    float angleToCPRad = angleBetween(pod.position, cmd.targetPos);
+    float angleToCPDeg = RAD_TO_DEG(angleToCPRad);
+    float angleDiff = fabsf(angleToCPDeg - pod.angle);
+    
+    if (angleDiff > 180) {
+        angleDiff = 360 - angleDiff;
+    }
+    
+    // 각도가 작고 미래 위치가 현재보다 체크포인트에서 더 멀면 드리프트 보상 적용
+    if (angleDiff < 70 && futureDist > currDist && currDist > CHECKPOINT_RADIUS * 2) {
+        Vector closestPoint = closestPointToLine(targetCP.position, pod.position, futurePos);
+        Vector compensation = subtract(closestPoint, futurePos);
+        compensation = scale(compensation, 1.5); // 보상 강화
+        cmd.targetPos = add(cmd.targetPos, compensation);
+    }
+    
+    // 속도와 거리에 기반한 적응형 추력 계산
+    cmd.thrust = calculateAdaptiveThrust(pod, angleDiff, (int)currDist, state->checkpoints, state->checkpointCount);
+    
+    // 마지막 체크포인트인지 확인 (랩 완주)
+    bool isLastCheckpoint = (pod.checkpointsPassed + 1) >= state->totalCheckpoints;
+    
+    // 부스트 사용 여부 결정
+    if (pod.boostAvailable && angleDiff < 10 && !isLastCheckpoint) {
+        // 첫 턴 또는 긴 직선 구간에서 부스트 사용
+        if ((podIndex == 0 && state->firstTurn) || currDist > state->longestStretch * 0.6) {
+            cmd.useBoost = true;
+        }
+    }
+    
+    // 쉴드 사용 여부 결정
+    cmd.useShield = shouldEnableShield(pod, otherPod, enemies, state->checkpoints, state->checkpointCount);
+    
+    return cmd;
+}
+
+// 포드 명령어 실행 함수
+void executePodCommand(PodCommand cmd) {
+    if (cmd.useShield) {
+        printf("%d %d SHIELD POD%d\n", cmd.targetPos.x, cmd.targetPos.y, cmd.podId);
+    }
+    else if (cmd.useBoost) {
+        printf("%d %d BOOST POD%d\n", cmd.targetPos.x, cmd.targetPos.y, cmd.podId);
+    }
+    else {
+        printf("%d %d %d POD%d thrust:%d\n", cmd.targetPos.x, cmd.targetPos.y, cmd.thrust, cmd.podId, cmd.thrust);
+    }
+}
+
+// 메인 함수 (간소화됨)
+int main() {
+    // 게임 초기화
+    initializeGame(&gameState);
+    
+    // 게임 루프
     while (1) {
-        // 내 포드 정보 입력
-        for (int i = 0; i < 2; i++) {
-            int x, y, vx, vy, angle, nextCheckPointId;
-            scanf("%d%d%d%d%d%d", &x, &y, &vx, &vy, &angle, &nextCheckPointId);
-            
-            // 체크포인트를 통과했는지 확인
-            if (myPods[i].nextCheckpointId != nextCheckPointId && !firstTurn) {
-                myPods[i].checkpointsPassed++;
-            }
-            
-            myPods[i].position.x = x;
-            myPods[i].position.y = y;
-            myPods[i].velocity.x = vx;
-            myPods[i].velocity.y = vy;
-            myPods[i].angle = angle;
-            myPods[i].nextCheckpointId = nextCheckPointId;
-            
-            // 쉴드 쿨다운 감소
-            if (myPods[i].shieldCooldown > 0) {
-                myPods[i].shieldCooldown--;
-            }
-        }
+        // 게임 상태 업데이트
+        updateGameState(&gameState);
         
-        // 적 포드 정보 입력
+        // 각 포드별 전략 결정 및 명령어 실행
         for (int i = 0; i < 2; i++) {
-            scanf("%d%d%d%d%d%d", 
-                  &enemyPods[i].position.x, &enemyPods[i].position.y,
-                  &enemyPods[i].velocity.x, &enemyPods[i].velocity.y,
-                  &enemyPods[i].angle, &enemyPods[i].nextCheckpointId);
-        }
-        
-        // 포드별 행동 결정
-        for (int i = 0; i < 2; i++) {
-            Pod* pod = &myPods[i];
-            Checkpoint targetCP = checkpoints[pod->nextCheckpointId];
-            
-            // 목표 지점 (기본: 체크포인트 위치)
-            Vector targetPos = targetCP.position;
-            
-            // 다음 체크포인트를 미리 확인
-            int nextCPId = (pod->nextCheckpointId + 1) % checkpointCount;
-            Checkpoint nextCP = checkpoints[nextCPId];
-            
-            // 의도적인 드리프트 - 체크포인트에 곧 들어갈 것 같으면 다음 체크포인트 방향으로 조절
-            if (willEnterCheckpointSoon(*pod, targetCP)) {
-                // 다음 체크포인트를 약간 향하도록 목표 위치 조정
-                Vector toNextCP = subtract(nextCP.position, pod->position);
-                toNextCP = normalize(toNextCP);
-                Vector toCurrCP = subtract(targetCP.position, pod->position);
-                toCurrCP = normalize(toCurrCP);
-                
-                Vector blendedDirection;
-                blendedDirection.x = (int)(0.8 * toCurrCP.x + 0.2 * toNextCP.x);
-                blendedDirection.y = (int)(0.8 * toCurrCP.y + 0.2 * toNextCP.y);
-                blendedDirection = normalize(blendedDirection);
-                
-                // 체크포인트 반지름 밖으로 약간 확장
-                targetPos.x = targetCP.position.x + (int)(blendedDirection.x * CHECKPOINT_RADIUS * 0.5);
-                targetPos.y = targetCP.position.y + (int)(blendedDirection.y * CHECKPOINT_RADIUS * 0.5);
-            }
-            
-            // 원치 않는 드리프트 보상
-            Vector futurePos;
-            futurePos.x = pod->position.x + pod->velocity.x;
-            futurePos.y = pod->position.y + pod->velocity.y;
-            
-            float currDist = distance(pod->position, targetCP.position);
-            float futureDist = distance(futurePos, targetCP.position);
-            
-            // 각도 차이 계산
-            float angleToCPRad = angleBetween(pod->position, targetPos);
-            float angleToCPDeg = RAD_TO_DEG(angleToCPRad);
-            float angleDiff = fabsf(angleToCPDeg - pod->angle);
-            
-            if (angleDiff > 180) {
-                angleDiff = 360 - angleDiff;
-            }
-            
-            // 각도가 작고 미래 위치가 현재보다 체크포인트에서 더 멀면 드리프트 보상 적용
-            if (angleDiff < 70 && futureDist > currDist && currDist > CHECKPOINT_RADIUS * 2) {
-                Vector closestPoint = closestPointToLine(targetCP.position, pod->position, futurePos);
-                Vector compensation = subtract(closestPoint, futurePos);
-                compensation = scale(compensation, 1.5); // 보상 강화
-                targetPos = add(targetPos, compensation);
-            }
-            
-            // 행동 결정: 추력, 부스트 또는 쉴드
-            int thrust = calculateThrust(angleDiff, (int)currDist);
-            
-            // 마지막 체크포인트인지 확인 (랩 완주)
-            bool isLastCheckpoint = (pod->checkpointsPassed + 1) >= totalCheckpoints;
-            
-            // 부스트 사용 여부 결정
-            bool useBoost = false;
-            if (pod->boostAvailable && !isLastCheckpoint) {
-                // 첫 번째 포드는 첫 턴에 부스트 사용
-                if (i == 0 && firstTurn) {
-                    useBoost = true;
-                }
-                // 두 번째 포드는 긴 거리에서 적절한 각도일 때 부스트 사용
-                else if (i == 1 && angleDiff < 5 && currDist > longestStretch * 0.7) {
-                    useBoost = true;
-                }
-            }
-            
-            // 쉴드 사용 여부 결정
-            bool useShield = shouldEnableShield(*pod, myPods[1-i], enemyPods);
+            // 포드 전략 결정
+            PodCommand cmd = determinePodStrategy(
+                gameState.myPods[i], 
+                gameState.myPods[1-i], 
+                gameState.enemyPods, 
+                &gameState, 
+                i
+            );
             
             // 쉴드 사용 시 쿨다운 설정
-            if (useShield) {
-                pod->shieldCooldown = 3;
+            if (cmd.useShield) {
+                gameState.myPods[i].shieldCooldown = 3;
             }
             
-            // 출력
-            if (useShield) {
-                printf("%d %d SHIELD\n", targetPos.x, targetPos.y);
+            // 부스트 사용 시 부스트 소진
+            if (cmd.useBoost) {
+                gameState.myPods[i].boostAvailable = false;
             }
-            else if (useBoost) {
-                printf("%d %d BOOST\n", targetPos.x, targetPos.y);
-                pod->boostAvailable = false;
-            }
-            else {
-                printf("%d %d %d\n", targetPos.x, targetPos.y, thrust);
-            }
+            
+            // 명령어 실행
+            executePodCommand(cmd);
         }
         
-        firstTurn = false;
+        gameState.firstTurn = false;
     }
     
     return 0;
