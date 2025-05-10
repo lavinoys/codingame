@@ -32,10 +32,17 @@ typedef struct {
     int radius;
 } Checkpoint;
 
+// 베지어 곡선 구조체 추가
+typedef struct {
+    Vector points[4]; // 3차 베지어 곡선을 위한 4개의 제어점
+    int numPoints;    // 실제 사용되는 제어점 수
+} BezierCurve;
+
 // 포드 정보 추가 구조체
 typedef struct {
     float progress;    // 레이스 진행도
     Vector racingLine; // 최적 레이싱 라인 목표점
+    BezierCurve racingCurve; // 베지어 곡선 경로
 } PodInfo;
 
 // 포드 명령어 구조체 추가
@@ -91,6 +98,14 @@ Vector predictCollisionWithPid(Pod pod, Pod other, PidController* pid, float del
 float collisionNicenessScore(Pod pod, Pod other, Checkpoint target);
 bool shouldEnableShield(Pod pod, Pod myOtherPod, Pod enemies[], Checkpoint checkpoints[], int checkpointCount);
 int calculateThrust(float angleDiff, int distToCheckpoint);
+
+// 베지어 곡선 관련 함수 선언 추가
+BezierCurve createBezierCurve(Vector p0, Vector p1, Vector p2, Vector p3);
+Vector evaluateBezierCurve(BezierCurve curve, float t);
+BezierCurve calculateRacingCurve(Pod pod, Checkpoint checkpoints[], int checkpointCount);
+Vector getBezierPoint(BezierCurve curve, float t);
+Vector getOptimalTargetFromCurve(Pod pod, BezierCurve curve, float lookAheadTime);
+
 Vector calculateRacingLine(Pod pod, Checkpoint checkpoints[], int checkpointCount, int lookAhead);
 float calculateProgress(Pod pod, Checkpoint checkpoints[], int checkpointCount);
 int calculateAdaptiveThrust(Pod pod, float angleDiff, int distToCheckpoint, Checkpoint checkpoints[], int checkpointCount);
@@ -361,53 +376,55 @@ int calculateThrust(float angleDiff, int distToCheckpoint) {
     return thrust;
 }
 
-// 레이싱 라인 계산 함수 (수정: 체크포인트 배열 매개변수 추가)
-Vector calculateRacingLine(Pod pod, Checkpoint checkpoints[], int checkpointCount, int lookAhead) {
-    Vector result = checkpoints[pod.nextCheckpointId].position;
-    
-    // 앞의 여러 체크포인트를 고려하여 레이싱 라인 계산
-    if (lookAhead > 0) {
-        Vector nextPoints[3]; // 최대 3개 체크포인트 고려
-        float weights[3] = {0.7, 0.2, 0.1}; // 가중치
-        
-        // 다음 체크포인트들의 위치 저장
-        for (int i = 0; i < lookAhead && i < 3; i++) {
-            int cpIndex = (pod.nextCheckpointId + i) % checkpointCount;
-            nextPoints[i] = checkpoints[cpIndex].position;
-        }
-        
-        // 가중 평균 계산으로 체크포인트 사이를 부드럽게 이동
-        Vector blended = {0, 0};
-        float totalWeight = 0;
-        
-        for (int i = 0; i < lookAhead && i < 3; i++) {
-            blended.x += nextPoints[i].x * weights[i];
-            blended.y += nextPoints[i].y * weights[i];
-            totalWeight += weights[i];
-        }
-        
-        // 정규화
-        if (totalWeight > 0) {
-            blended.x /= totalWeight;
-            blended.y /= totalWeight;
-        }
-        
-        // 현재 체크포인트에서 조금 벗어난 지점을 목표로
-        Vector dirToCP = subtract(checkpoints[pod.nextCheckpointId].position, pod.position);
-        float distToCP = sqrtf(dirToCP.x * dirToCP.x + dirToCP.y * dirToCP.y);
-        
-        // 체크포인트에 접근함에 따라 앞의 체크포인트 영향력 증가
-        float blendFactor;
-        if (distToCP < CHECKPOINT_RADIUS * 3) {
-            blendFactor = 0.5 - 0.5 * (distToCP / (CHECKPOINT_RADIUS * 3));
-            
-            // 목표 지점 조정
-            result.x = (int)((1 - blendFactor) * result.x + blendFactor * blended.x);
-            result.y = (int)((1 - blendFactor) * result.y + blendFactor * blended.y);
-        }
-    }
-    
+// 베지어 곡선 생성 함수
+BezierCurve createBezierCurve(Vector p0, Vector p1, Vector p2, Vector p3) {
+    BezierCurve curve;
+    curve.points[0] = p0;
+    curve.points[1] = p1;
+    curve.points[2] = p2;
+    curve.points[3] = p3;
+    curve.numPoints = 4;
+    return curve;
+}
+
+// 베지어 곡선 평가 함수
+Vector evaluateBezierCurve(BezierCurve curve, float t) {
+    Vector result;
+    float u = 1 - t;
+    float tt = t * t;
+    float uu = u * u;
+    float uuu = uu * u;
+    float ttt = tt * t;
+
+    result.x = (int)(uuu * curve.points[0].x +
+                     3 * uu * t * curve.points[1].x +
+                     3 * u * tt * curve.points[2].x +
+                     ttt * curve.points[3].x);
+    result.y = (int)(uuu * curve.points[0].y +
+                     3 * uu * t * curve.points[1].y +
+                     3 * u * tt * curve.points[2].y +
+                     ttt * curve.points[3].y);
     return result;
+}
+
+// 베지어 곡선 기반 레이싱 경로 계산
+BezierCurve calculateRacingCurve(Pod pod, Checkpoint checkpoints[], int checkpointCount) {
+    Vector p0 = pod.position;
+    Vector p1 = checkpoints[pod.nextCheckpointId].position;
+    Vector p2 = checkpoints[(pod.nextCheckpointId + 1) % checkpointCount].position;
+    Vector p3 = checkpoints[(pod.nextCheckpointId + 2) % checkpointCount].position;
+    return createBezierCurve(p0, p1, p2, p3);
+}
+
+// 베지어 곡선에서 최적 목표 지점 계산
+Vector getOptimalTargetFromCurve(Pod pod, BezierCurve curve, float lookAheadTime) {
+    return evaluateBezierCurve(curve, lookAheadTime);
+}
+
+// 레이싱 라인 계산 함수 (수정: 베지어 곡선 기반으로 변경)
+Vector calculateRacingLine(Pod pod, Checkpoint checkpoints[], int checkpointCount, int lookAhead) {
+    BezierCurve curve = calculateRacingCurve(pod, checkpoints, checkpointCount);
+    return getOptimalTargetFromCurve(pod, curve, 0.5f); // lookAheadTime은 0.5로 설정
 }
 
 // 포드 진행상황 계산 (수정: 체크포인트 배열 매개변수 추가)
@@ -568,6 +585,13 @@ void updateGameState(GameState* state) {
         
         // 진행 상황 계산
         state->myPodsInfo[i].progress = calculateProgress(
+            state->myPods[i], 
+            state->checkpoints, 
+            state->checkpointCount
+        );
+        
+        // 베지어 곡선 경로 계산
+        state->myPodsInfo[i].racingCurve = calculateRacingCurve(
             state->myPods[i], 
             state->checkpoints, 
             state->checkpointCount
