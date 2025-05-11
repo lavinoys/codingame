@@ -1,6 +1,7 @@
 package multi.bot.madpodracing.gold
 
 import java.util.*
+import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
@@ -68,7 +69,7 @@ interface Pod {
     }
 
     fun getInfoStr(): String {
-        return "[$id] x:$x y:$y vx:$vx vy:$vy angle:$angle nextCheckPointId:$nextCheckPointId"
+        return "[$id] angle:$angle nextCheckPointId:$nextCheckPointId"
     }
 }
 
@@ -83,7 +84,8 @@ data class MyPod(
     var shieldCooldown: Int = 0,
     var beforeInfo: BeforeInfo? = null,
     var opponentPods: List<OpponentPod> = emptyList(),
-    var nextCheckPoint: Checkpoint = GlobalVars.checkpoints[nextCheckPointId]
+    var nextCheckPoint: Checkpoint = GlobalVars.checkpoints[nextCheckPointId],
+    val isRacer: Boolean
 ): Pod {
     override fun updateInfo(x: Int, y: Int, vx: Int, vy: Int, angle: Int, nextCheckPointId: Int) {
         super.updateInfo(x, y, vx, vy, angle, nextCheckPointId)
@@ -93,35 +95,55 @@ data class MyPod(
 
     private fun getThrustToCheckPoint(): Int {
         val distanceToCheckPoint: Int = Calculator.getDistance(x, y, nextCheckPoint.x, nextCheckPoint.y)
+        val angleToCheckPoint: Int = Calculator.getAngle(x, y, nextCheckPoint.x, nextCheckPoint.y)
+        val angleDiff =  abs(angleToCheckPoint - angle)
+        System.err.println("angleDiff: $angleDiff")
         return when {
-            8000 < distanceToCheckPoint -> 100
-            7000 < distanceToCheckPoint -> 95
-            6000 < distanceToCheckPoint -> 90
-            5000 < distanceToCheckPoint -> 85
-            4000 < distanceToCheckPoint -> 80
-            3000 < distanceToCheckPoint -> 75
-            2000 < distanceToCheckPoint -> 70
-            1000 < distanceToCheckPoint -> 65
-            else -> 40
+            50 < angleDiff -> 5
+            40 < angleDiff -> 10
+            30 < angleDiff -> 20
+            20 < angleDiff -> 40
+            10 < angleDiff -> 60
+            else -> {
+                when(distanceToCheckPoint) {
+                    in 0..500 -> 20
+                    in 501..1000 -> 40
+                    in 1001..2000 -> 60
+                    in 2001..3000 -> 80
+                    else -> 100
+                }
+            }
         }
+    }
+
+    private fun expectCollision(): Pair<Int, Int>? {
+        val (nextX, nextY) = this.getNextCoordinate()
+        opponentPods.forEach { opponentPod ->
+            val (nextOpponentX, nextOpponentY) = opponentPod.getNextCoordinate()
+            val fromOur = Calculator.getDistance(opponentPod.x, opponentPod.y, nextX, nextY)
+            val fromOpponent = Calculator.getDistance(x, y, nextOpponentX, nextOpponentY)
+            val fromNextMixed = Calculator.getDistance(nextX, nextY, nextOpponentX, nextOpponentY)
+            if (fromOur < GlobalVars.POD_RADIUS || fromOpponent < GlobalVars.POD_RADIUS || fromNextMixed < 800) {
+                return Pair(nextOpponentX, nextOpponentY)
+            }
+        }
+        return null
     }
 
     private fun shouldUseShield(): Boolean {
         if (shieldCooldown in intArrayOf(1, 2)) return false
-        return opponentPods.any { opponent ->
-            val (nextX, nextY) = this.getNextCoordinate()
-            val (nextOpponentX, nextOpponentY) = opponent.getNextCoordinate()
-            val distanceToOpponent: Int = Calculator.getDistance(nextX, nextY, nextOpponentX, nextOpponentY)
-            distanceToOpponent < 900
-        }
+        return expectCollision() != null
     }
 
     private fun shouldUseBoost(): Boolean {
         if (!GlobalVars.canUseBoost) return false
         if (shieldCooldown > 0) return false
         if (nextCheckPointId == 0) return false
+        val angleToCheckPoint: Int = Calculator.getAngle(x, y, nextCheckPoint.x, nextCheckPoint.y)
+        val angleDiff =  abs(angleToCheckPoint - angle)
+        if (angleDiff > 10) return false
         val distanceToCheckPoint: Int = Calculator.getDistance(x, y, nextCheckPoint.x, nextCheckPoint.y)
-        return distanceToCheckPoint > 5000
+        return distanceToCheckPoint > 6000
     }
 
     fun updateBeforeInfo() {
@@ -141,15 +163,19 @@ data class MyPod(
     }
 
     fun commandStr(): String {
-        if (shouldUseBoost()) {
+        if (isRacer && shouldUseBoost()) {
             GlobalVars.canUseBoost = false
             return "${nextCheckPoint.x} ${nextCheckPoint.y} BOOST ${getInfoStr()} BOOST"
         }
         // Shield 사용 결정
         if (shouldUseShield()) {
-            System.err.println("shieldCooldown: $shieldCooldown")
             shieldCooldown = 4 // 현재 턴 + 3턴 쿨다운
             return "${nextCheckPoint.x} ${nextCheckPoint.y} SHIELD ${getInfoStr()} SHIELD"
+        }
+        if (!isRacer) {
+            expectCollision()?.let { (x, y) ->
+                return "$x $y 100 ${getInfoStr()} rush"
+            }
         }
         return "${nextCheckPoint.x} ${nextCheckPoint.y} ${getThrustToCheckPoint()} ${getInfoStr()} thrust: ${getThrustToCheckPoint()}"
     }
@@ -188,7 +214,9 @@ fun main() {
         )
     }
     // init pod
-    val myPods: List<MyPod> = (0 until GlobalVars.POD_COUNT).map { idx -> MyPod(id = idx) }
+    val myPods: List<MyPod> = (0 until GlobalVars.POD_COUNT).map { idx ->
+        MyPod(id = idx, isRacer = idx == 0)
+    }
     val opponentPods: List<OpponentPod> = (0 until GlobalVars.POD_COUNT).map { idx -> OpponentPod(id = idx) }
 
     // game loop
