@@ -55,12 +55,56 @@ object Calculator {
     }
 }
 
+class PIDController(
+    private var kp: Double,     // 비례 게인
+    private var ki: Double,     // 적분 게인
+    private var kd: Double,     // 미분 게인
+    private var maxOutput: Double = 100.0,  // 최대 출력값
+    private var maxIntegral: Double = 50.0  // 적분항 최대값 (windup 방지)
+) {
+    private var previousError: Double = 0.0
+    private var integral: Double = 0.0
+    private var firstRun: Boolean = true
+
+    // 턴 기반 게임에 최적화된 계산 메서드
+    fun calculate(setpoint: Double, currentValue: Double): Double {
+        // 오차 계산
+        val error = setpoint - currentValue
+
+        // 첫 실행 시 이전 오차 초기화
+        if (firstRun) {
+            previousError = error
+            firstRun = false
+        }
+
+        // 적분항 업데이트 (windup 방지)
+        integral += error
+        integral = integral.coerceIn(-maxIntegral, maxIntegral)
+
+        // 미분항 계산 (오차 변화량)
+        val derivative = error - previousError
+        previousError = error
+
+        // PID 출력 계산
+        val output = kp * error + ki * integral + kd * derivative
+
+        // 출력 제한 (-100 ~ 100)
+        return output.coerceIn(-maxOutput, maxOutput)
+    }
+
+    // 컨트롤러 초기화
+    fun reset() {
+        previousError = 0.0
+        integral = 0.0
+        firstRun = true
+    }
+}
+
 data class Checkpoint(
     val id: Int,
     val x: Int,
     val y: Int
 )
-
 
 interface Pod {
     val id: Int
@@ -104,13 +148,21 @@ data class MyPod(
     var shieldCooldown: Int = 0,
     var opponentPods: List<OpponentPod> = emptyList(),
     var nextCheckPoint: Checkpoint = GlobalVars.checkpoints[nextCheckPointId],
-    val isRacer: Boolean
+    val isRacer: Boolean,
+    // PID 컨트롤러 추가
+    private val anglePID: PIDController = PIDController(0.8, 0.01, 0.4),
+    private val thrustPID: PIDController = PIDController(0.5, 0.0, 0.2, 100.0, 30.0)
 ): Pod {
 
     override fun updateInfo(x: Int, y: Int, vx: Int, vy: Int, angle: Int, nextCheckPointId: Int) {
         super.updateInfo(x, y, vx, vy, angle, nextCheckPointId)
-        this.nextCheckPoint = GlobalVars.checkpoints[nextCheckPointId]  // 이 부분 추가
+        this.nextCheckPoint = GlobalVars.checkpoints[nextCheckPointId]
         this.shieldCooldown = Math.max(0, this.shieldCooldown - 1)
+        // 체크포인트가 변경되면 PID 리셋
+        if (this.nextCheckPointId != nextCheckPointId) {
+            anglePID.reset()
+            thrustPID.reset()
+        }
     }
 
     // 최적 경로를 위한 목표점 계산
@@ -136,9 +188,9 @@ data class MyPod(
     }
 
     private fun getThrustToCheckPoint(): Int {
-        val (dx, dy) = getCalculateNextCheckpoint()
-        val distanceToCheckPoint: Int = Calculator.getDistance(x, y, dx, dy)
-        val angleDiff = Calculator.getAngleDiff(x, y, dx, dy, angle)
+        val (targetX, targetY) = getCalculateNextCheckpoint()
+        val distanceToCheckPoint: Int = Calculator.getDistance(x, y, targetX, targetY)
+        val angleDiff = Calculator.getAngleDiff(x, y, targetX, targetY, angle)
         System.err.println("pod: $id, angleDiff: $angleDiff")
         return when {
             30 < angleDiff -> 5
@@ -152,6 +204,68 @@ data class MyPod(
                 }
             }
         }
+    }
+
+    private fun getThrustByPID(): Int {
+        val (targetX, targetY) = getCalculateNextCheckpoint()
+        val distanceToCheckPoint = Calculator.getDistance(x, y, targetX, targetY)
+        val angleDiff = Calculator.getNormalizedAngleDiff(x, y, targetX, targetY, angle)
+
+        // 속도 계산 및 정지 상태 감지
+        val speedMagnitude = sqrt((vx * vx + vy * vy).toDouble())
+        val isAlmostStopped = speedMagnitude < 50
+
+        // 정밀 제어가 필요한 상황 확인
+        val needsPreciseControl = Math.abs(angleDiff) > 20 || distanceToCheckPoint <= 3000
+
+        if (!needsPreciseControl) {
+            // 정밀 제어가 필요 없는 경우 공격적으로 100 추력
+            return 100
+        }
+
+        // 정밀 제어가 필요한 상황에서의 로직
+
+        // 각도 제어 신호 계산
+        val angleControl = anglePID.calculate(0.0, angleDiff)
+
+        // 속도 방향과 목표 방향 간 일치도 계산
+        val targetAngleRad = atan2((targetY - y).toDouble(), (targetX - x).toDouble())
+        val velocityAngleRad = if (speedMagnitude > 10) atan2(vy.toDouble(), vx.toDouble()) else targetAngleRad
+        val velocityAlignmentFactor = Math.cos(targetAngleRad - velocityAngleRad)
+
+        // 기본 추력 계산 - 거리 기반 최적화
+        val baseThrust = when {
+            distanceToCheckPoint > 4000 -> 100.0 // 먼 거리에서는 최대 추력
+            distanceToCheckPoint > 3000 -> 90.0 + 10.0 * ((distanceToCheckPoint - 3000) / 1000.0) // 3000~4000 구간 선형 증가
+            distanceToCheckPoint > 2000 -> 80.0 + 10.0 * ((distanceToCheckPoint - 2000) / 1000.0) // 2000~3000 구간 선형 증가
+            distanceToCheckPoint > 1000 -> 60.0 + 20.0 * ((distanceToCheckPoint - 1000) / 1000.0) // 1000~2000 구간 선형 증가
+            distanceToCheckPoint > 500 -> 40.0 + 20.0 * ((distanceToCheckPoint - 500) / 500.0)   // 500~1000 구간 선형 증가
+            else -> 30.0 + 10.0 * (distanceToCheckPoint / 500.0) // 0~500 구간 선형 증가
+        }
+
+        // 각도에 따른 추력 조정 계수
+        val angleControlFactor = if (isAlmostStopped) {
+            // 정지 상태에서는 각도 요소의 영향 감소
+            Math.max(0.3, 1.0 - Math.min(0.7, Math.abs(angleControl) / 100.0))
+        } else {
+            1.0 - Math.min(0.8, Math.abs(angleControl) / 100.0)
+        }
+
+        // 속도 일치도에 따른 계수
+        val velocityFactor = 0.6 + 0.4 * Math.max(0.0, velocityAlignmentFactor)
+
+        // 최종 추력 계산
+        val finalThrust = baseThrust * angleControlFactor * velocityFactor
+
+        // 각도별 최소 추력 보장
+        val thrustResult = when {
+            Math.abs(angleDiff) > 90 -> if (isAlmostStopped) 20 else 10
+            Math.abs(angleDiff) > 45 -> Math.max(25, finalThrust.toInt() / 2)
+            else -> finalThrust.toInt()
+        }
+
+        // 최소 10, 최대 100 보장
+        return thrustResult.coerceIn(10, 100)
     }
 
     private fun expectCollision(collisionDistance: Int = 800): Pair<Int, Int>? {
@@ -200,11 +314,11 @@ data class MyPod(
             return "$x $y SHIELD ${getInfoStr()} SHIELD"
         }
         if (!isRacer) {
-            expectCollision(2000)?.let { (x, y) ->
+            expectCollision(1500)?.let { (x, y) ->
                 return "$x $y 100 ${getInfoStr()} rush"
             }
         }
-        val thrust = getThrustToCheckPoint()
+        val thrust = getThrustByPID()
         return "$tx $ty $thrust ${getInfoStr()} thrust: $thrust"
     }
 }
