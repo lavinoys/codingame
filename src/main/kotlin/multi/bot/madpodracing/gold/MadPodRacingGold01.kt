@@ -165,7 +165,6 @@ data class MyPod(
         }
     }
 
-    // 최적 경로를 위한 목표점 계산
     private fun getCalculateNextCheckpoint(): Pair<Int, Int> {
         // 체크포인트 방향으로의 기본 목표점
         var targetX = nextCheckPoint.x
@@ -175,13 +174,26 @@ data class MyPod(
         val nextIdx = (nextCheckPointId + 1) % GlobalVars.checkpointCount
         val nextNextCheckpoint = GlobalVars.checkpoints[nextIdx]
 
+        // 현재 속도 계산
+        val currentSpeed = sqrt((vx * vx + vy * vy).toDouble())
+
+        // 속도에 따라 선회 시작 거리 동적 조정 (최소 800 ~ 최대 2000)
+        val turnStartDistance = (800 + currentSpeed * 2.5).coerceIn(800.0, 2000.0)
+
         val distanceToCheckpoint = Calculator.getDistance(x, y, nextCheckPoint.x, nextCheckPoint.y)
 
-        // 체크포인트에 가까워지면 다음 체크포인트 방향으로 조금씩 선회
-        if (distanceToCheckpoint < 1500) {
-            val ratio = (1500 - distanceToCheckpoint) / 1500.0
-            targetX = (nextCheckPoint.x + (nextNextCheckpoint.x - nextCheckPoint.x) * ratio * 0.5).toInt()
-            targetY = (nextCheckPoint.y + (nextNextCheckpoint.y - nextCheckPoint.y) * ratio * 0.5).toInt()
+        // 체크포인트에 가까워지면 다음 체크포인트 방향으로 선회
+        if (distanceToCheckpoint < turnStartDistance) {
+            // 속도가 빠를수록 강하게 선회, 느릴수록 약하게 선회
+            val baseRatio = (turnStartDistance - distanceToCheckpoint) / turnStartDistance
+            val speedFactor = (currentSpeed / 400.0).coerceIn(0.5, 1.5)
+            val ratio = baseRatio * speedFactor
+
+            // 선회 비율 제한 (최대 0.8까지)
+            val cappedRatio = ratio.coerceIn(0.0, 0.8)
+
+            targetX = (nextCheckPoint.x + (nextNextCheckpoint.x - nextCheckPoint.x) * cappedRatio * 0.5).toInt()
+            targetY = (nextCheckPoint.y + (nextNextCheckpoint.y - nextCheckPoint.y) * cappedRatio * 0.5).toInt()
         }
 
         return Pair(targetX, targetY)
@@ -211,41 +223,40 @@ data class MyPod(
         val distanceToCheckPoint = Calculator.getDistance(x, y, targetX, targetY)
         val angleDiff = Calculator.getNormalizedAngleDiff(x, y, targetX, targetY, angle)
 
-        // 속도 계산 및 정지 상태 감지
-        val speedMagnitude = sqrt((vx * vx + vy * vy).toDouble())
-        val isAlmostStopped = speedMagnitude < 50
+        // 현재 속도 계산
+        val currentSpeed = sqrt((vx * vx + vy * vy).toDouble())
 
-        // 정밀 제어가 필요한 상황 확인
-        val needsPreciseControl = Math.abs(angleDiff) > 20 || distanceToCheckPoint <= 3000
-
-        if (!needsPreciseControl) {
-            // 정밀 제어가 필요 없는 경우 공격적으로 100 추력
-            return 100
+        // 기본 목표 추력 계산 (기존 코드와 동일)
+        val baseThrust = when {
+            distanceToCheckPoint > 4000 -> 100.0
+            distanceToCheckPoint > 3000 -> 90.0 + 10.0 * ((distanceToCheckPoint - 3000) / 1000.0)
+            distanceToCheckPoint > 2000 -> 80.0 + 10.0 * ((distanceToCheckPoint - 2000) / 1000.0)
+            // 2000 이내 세분화된 구간
+            distanceToCheckPoint > 1500 -> 70.0 + 10.0 * ((distanceToCheckPoint - 1500) / 500.0)
+            distanceToCheckPoint > 1000 -> 60.0 + 10.0 * ((distanceToCheckPoint - 1000) / 500.0)
+            distanceToCheckPoint > 750 -> 50.0 + 10.0 * ((distanceToCheckPoint - 750) / 250.0)
+            distanceToCheckPoint > 500 -> 40.0 + 10.0 * ((distanceToCheckPoint - 500) / 250.0)
+            distanceToCheckPoint > 300 -> 35.0 + 5.0 * ((distanceToCheckPoint - 300) / 200.0)
+            distanceToCheckPoint > 150 -> 30.0 + 5.0 * ((distanceToCheckPoint - 150) / 150.0)
+            else -> 20.0 + 10.0 * (distanceToCheckPoint / 150.0)
         }
 
-        // 정밀 제어가 필요한 상황에서의 로직
+        // 목표 속도 계산 (baseThrust에 비례)
+        val targetSpeed = baseThrust * 6.5  // 추력을 속도로 변환한 근사치
 
-        // 각도 제어 신호 계산
+        // thrustPID 컨트롤러로 목표 속도에 도달하기 위한 추력 보정값 계산
+        val speedAdjustment = thrustPID.calculate(targetSpeed, currentSpeed)
+
+        // 기존 각도 계산 로직
         val angleControl = anglePID.calculate(0.0, angleDiff)
 
-        // 속도 방향과 목표 방향 간 일치도 계산
+        // 나머지 기존 로직
         val targetAngleRad = atan2((targetY - y).toDouble(), (targetX - x).toDouble())
-        val velocityAngleRad = if (speedMagnitude > 10) atan2(vy.toDouble(), vx.toDouble()) else targetAngleRad
+        val velocityAngleRad = if (currentSpeed > 10) atan2(vy.toDouble(), vx.toDouble()) else targetAngleRad
         val velocityAlignmentFactor = Math.cos(targetAngleRad - velocityAngleRad)
 
-        // 기본 추력 계산 - 거리 기반 최적화
-        val baseThrust = when {
-            distanceToCheckPoint > 4000 -> 100.0 // 먼 거리에서는 최대 추력
-            distanceToCheckPoint > 3000 -> 90.0 + 10.0 * ((distanceToCheckPoint - 3000) / 1000.0) // 3000~4000 구간 선형 증가
-            distanceToCheckPoint > 2000 -> 80.0 + 10.0 * ((distanceToCheckPoint - 2000) / 1000.0) // 2000~3000 구간 선형 증가
-            distanceToCheckPoint > 1000 -> 60.0 + 20.0 * ((distanceToCheckPoint - 1000) / 1000.0) // 1000~2000 구간 선형 증가
-            distanceToCheckPoint > 500 -> 40.0 + 20.0 * ((distanceToCheckPoint - 500) / 500.0)   // 500~1000 구간 선형 증가
-            else -> 30.0 + 10.0 * (distanceToCheckPoint / 500.0) // 0~500 구간 선형 증가
-        }
-
         // 각도에 따른 추력 조정 계수
-        val angleControlFactor = if (isAlmostStopped) {
-            // 정지 상태에서는 각도 요소의 영향 감소
+        val angleControlFactor = if (currentSpeed < 50) {
             Math.max(0.3, 1.0 - Math.min(0.7, Math.abs(angleControl) / 100.0))
         } else {
             1.0 - Math.min(0.8, Math.abs(angleControl) / 100.0)
@@ -254,17 +265,16 @@ data class MyPod(
         // 속도 일치도에 따른 계수
         val velocityFactor = 0.6 + 0.4 * Math.max(0.0, velocityAlignmentFactor)
 
-        // 최종 추력 계산
-        val finalThrust = baseThrust * angleControlFactor * velocityFactor
+        // PID 보정을 적용한 최종 추력 계산
+        val finalThrust = (baseThrust + speedAdjustment) * angleControlFactor * velocityFactor
 
         // 각도별 최소 추력 보장
         val thrustResult = when {
-            Math.abs(angleDiff) > 90 -> if (isAlmostStopped) 20 else 10
+            Math.abs(angleDiff) > 90 -> if (currentSpeed < 50) 20 else 10
             Math.abs(angleDiff) > 45 -> Math.max(25, finalThrust.toInt() / 2)
             else -> finalThrust.toInt()
         }
 
-        // 최소 10, 최대 100 보장
         return thrustResult.coerceIn(10, 100)
     }
 
