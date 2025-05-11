@@ -145,6 +145,7 @@ data class MyPod(
     override var vy: Int = 0, // -667 ~ 667
     override var angle: Int = 0, // 0 ~ 360
     override var nextCheckPointId: Int = 0,
+    val currentSpeed: Double = sqrt((vx * vx + vy * vy).toDouble()),
     var shieldCooldown: Int = 0,
     var opponentPods: List<OpponentPod> = emptyList(),
     var nextCheckPoint: Checkpoint = GlobalVars.checkpoints[nextCheckPointId],
@@ -174,11 +175,8 @@ data class MyPod(
         val nextIdx = (nextCheckPointId + 1) % GlobalVars.checkpointCount
         val nextNextCheckpoint = GlobalVars.checkpoints[nextIdx]
 
-        // 현재 속도 계산
-        val currentSpeed = sqrt((vx * vx + vy * vy).toDouble())
-
-        // 속도에 따라 선회 시작 거리 동적 조정 (최소 800 ~ 최대 2000)
-        val turnStartDistance = (800 + currentSpeed * 2.5).coerceIn(800.0, 2000.0)
+        // 속도에 따라 선회 시작 거리 동적 조정 (최소 800 ~ 최대 1500)
+        val turnStartDistance = (800 + currentSpeed * 2.5).coerceIn(800.0, 1500.0)
 
         val distanceToCheckpoint = Calculator.getDistance(x, y, nextCheckPoint.x, nextCheckPoint.y)
 
@@ -223,14 +221,8 @@ data class MyPod(
         val distanceToCheckPoint = Calculator.getDistance(x, y, targetX, targetY)
         val angleDiff = Calculator.getNormalizedAngleDiff(x, y, targetX, targetY, angle)
 
-        // 현재 속도 계산
-        val currentSpeed = sqrt((vx * vx + vy * vy).toDouble())
-
-        // 기본 목표 추력 계산 (기존 코드와 동일)
         val baseThrust = when {
-            distanceToCheckPoint > 4000 -> 100.0
-            distanceToCheckPoint > 3000 -> 90.0 + 10.0 * ((distanceToCheckPoint - 3000) / 1000.0)
-            distanceToCheckPoint > 2000 -> 80.0 + 10.0 * ((distanceToCheckPoint - 2000) / 1000.0)
+            distanceToCheckPoint > 2000 -> 100.0
             // 2000 이내 세분화된 구간
             distanceToCheckPoint > 1500 -> 70.0 + 10.0 * ((distanceToCheckPoint - 1500) / 500.0)
             distanceToCheckPoint > 1000 -> 60.0 + 10.0 * ((distanceToCheckPoint - 1000) / 500.0)
