@@ -114,7 +114,7 @@ Each pod is represented by: 6 integers, x & y for the position. vx & vy for the 
 
 #### Output for one game turn
 
-Two lines: 2 integers for the target coordinates of your pod followed by thrust , the acceleration to give your pod, or by SHIELD to activate the shields, or by BOOST for an acceleration burst. One line per pod.
+Two lines: 2 integers for the target coordinates of your pod followed by thrust, the acceleration to give your pod, or by SHIELD to activate the shields, or by BOOST for an acceleration burst. One line per pod.
 
 x y thrust 뒤에 디버그 메시지를 넣을 수 있다. (ex. x y 100 racer thrust: 100)
 ex. x y sheid racer shield
