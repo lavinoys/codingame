@@ -161,7 +161,7 @@ data class MyPod(
         val angleDiff = abs(Calculator.getNormalizedAngleDiff(x, y, targetX, targetY, angle))
 
         // 체크포인트 간 거리가 2000 이상이면 각도와 상관없이 최대 추력 사용
-        if (distanceToCheckPoint > 2000) {
+        if (distanceToCheckPoint > 3000) {
             return 100
         }
 
@@ -176,6 +176,7 @@ data class MyPod(
 
         // 거리에 따른 기본 추력 계산
         val baseThrust = when {
+            distanceToCheckPoint > 2000 -> 90
             distanceToCheckPoint > 1000 -> 70
             distanceToCheckPoint > 500 -> 50
             distanceToCheckPoint > 200 -> 30
