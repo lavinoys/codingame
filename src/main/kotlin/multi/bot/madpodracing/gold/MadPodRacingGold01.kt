@@ -171,7 +171,7 @@ interface Pod {
     }
 
     fun getInfoStr(): String {
-        return "[$id] x:$x y:$y vx:$vx vy:$vy angle:$angle nextCheckPointId:$nextCheckPointId"
+        return "[$id] nextCheckPointId:$nextCheckPointId"
     }
 }
 
@@ -247,7 +247,6 @@ data class MyPod(
     }
 
     private fun shouldUseBoost(): Boolean {
-        System.err.println("useBoostCheckpointId: ${GlobalVars.useBoostCheckpointId}")
         val isLastChance = this.laps == (GlobalVars.laps-1) && this.nextCheckPointId == GlobalVars.useBoostCheckpointId
         if (!isLastChance) return false
         if (!GlobalVars.canUseBoost) return false
