@@ -1,14 +1,11 @@
 package multi.bot.madpodracing.gold
 
 import java.util.*
-import kotlin.collections.get
-import kotlin.compareTo
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
-import kotlin.text.get
 
 object GlobalVars {
     const val MAP_MAX_X = 16000
@@ -78,12 +75,6 @@ data class Checkpoint(
     private fun contains(pointX: Int, pointY: Int): Boolean {
         val distance = Calculator.getDistance(x, y, pointX, pointY)
         return distance <= GlobalVars.CHECKPOINT_RADIUS
-    }
-
-    // 현재 체크포인트에서 다음 체크포인트까지의 거리 계산
-    private fun getDistanceToNextCheckpoint(): Double {
-        val nextCheckpoint = GlobalVars.checkpoints[(id + 1) % GlobalVars.checkpointCount]
-        return Calculator.getDistance(x, y, nextCheckpoint.x, nextCheckpoint.y)
     }
 
     // 파드의 위치와 다음 체크포인트를 고려하여 최적의 진입점을 반환
