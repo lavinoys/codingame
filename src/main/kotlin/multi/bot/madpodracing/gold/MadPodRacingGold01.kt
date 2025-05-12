@@ -1,11 +1,14 @@
 package multi.bot.madpodracing.gold
 
 import java.util.*
+import kotlin.collections.get
+import kotlin.compareTo
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
+import kotlin.text.get
 
 object GlobalVars {
     const val MAP_MAX_X = 16000
@@ -14,11 +17,12 @@ object GlobalVars {
     const val POD_RADIUS = 400
     const val FRICTION = 0.85
     const val POD_COUNT = 2
-    const val SO_FAR = 4000
+    const val SO_FAR = 2000
     lateinit var checkpoints: List<Checkpoint>
     var laps: Int = 0
     var checkpointCount: Int = 0
     var canUseBoost: Boolean = true
+    var useBoostCheckpointId: Int = 0
 }
 
 object Calculator {
@@ -41,6 +45,27 @@ object Calculator {
         val angle = Math.toDegrees(atan2(dy, dx))
         return if (angle < 0) angle + 360 else angle
     }
+
+    // 연속된 체크포인트 중 가장 먼 거리를 가진 체크포인트의 ID 반환
+    // 반환값은 해당 체크포인트의 ID이며, 이 체크포인트에서 다음 체크포인트까지가 가장 긴 거리
+    fun getFurthestCheckpointId(): Int {
+        var maxDistance = 0.0
+        var furthestCheckpointId = 0
+
+        for (i in 0 until GlobalVars.checkpointCount) {
+            val current = GlobalVars.checkpoints[i]
+            val next = GlobalVars.checkpoints[(i + 1) % GlobalVars.checkpointCount]
+
+            val distance = getDistance(current.x, current.y, next.x, next.y)
+
+            if (distance > maxDistance) {
+                maxDistance = distance
+                furthestCheckpointId = i
+            }
+        }
+
+        return furthestCheckpointId
+    }
 }
 
 data class Checkpoint(
@@ -53,6 +78,12 @@ data class Checkpoint(
     private fun contains(pointX: Int, pointY: Int): Boolean {
         val distance = Calculator.getDistance(x, y, pointX, pointY)
         return distance <= GlobalVars.CHECKPOINT_RADIUS
+    }
+
+    // 현재 체크포인트에서 다음 체크포인트까지의 거리 계산
+    private fun getDistanceToNextCheckpoint(): Double {
+        val nextCheckpoint = GlobalVars.checkpoints[(id + 1) % GlobalVars.checkpointCount]
+        return Calculator.getDistance(x, y, nextCheckpoint.x, nextCheckpoint.y)
     }
 
     // 파드의 위치와 다음 체크포인트를 고려하여 최적의 진입점을 반환
@@ -166,6 +197,8 @@ data class MyPod(
     var shieldCooldown: Int = 0,
     var nextCheckpoint: Checkpoint = GlobalVars.checkpoints[nextCheckPointId],
     var thrust: Int = 100,
+    var beforeNextCheckpointId: Int = 0,
+    var laps: Int = 0,
     val isRacer: Boolean
 ): Pod {
 
@@ -175,18 +208,25 @@ data class MyPod(
         this.shieldCooldown = (this.shieldCooldown - 1).coerceIn(0, 4)
         this.currentSpeed = sqrt((vx * vx + vy * vy).toDouble())
         this.thrust = calculateThrust()
+        if (this.beforeNextCheckpointId != nextCheckPointId) {
+            this.beforeNextCheckpointId = nextCheckPointId
+            if (nextCheckPointId == 1) {
+                this.laps ++
+            }
+        }
     }
 
     private fun calculateThrust(): Int {
+        if (shieldCooldown == 3) return 0
         val angleDiff = Calculator.getAngleDiff(x, y, nextCheckpoint.x, nextCheckpoint.y, angle)
         val distanceToCheckPoint: Double = Calculator.getDistance(x, y, nextCheckpoint.x, nextCheckpoint.y)
-        if (distanceToCheckPoint > GlobalVars.SO_FAR) {
+        if (angleDiff > 150) { return 5 }
+        if (angleDiff > 120) { return 10 }
+        if (angleDiff > 90) { return 20 }
+        if (distanceToCheckPoint > GlobalVars.SO_FAR && currentSpeed < 200) {
             return 100
         }
         return when {
-            angleDiff > 150 -> 5
-            angleDiff > 120 -> 10
-            angleDiff > 90 -> 20
             angleDiff > 60 -> 30
             angleDiff > 45 -> 40
             angleDiff > 30 -> 50
@@ -216,13 +256,15 @@ data class MyPod(
     }
 
     private fun shouldUseBoost(): Boolean {
+        val isLastChance = this.laps == (GlobalVars.laps-1) && this.nextCheckPointId == GlobalVars.useBoostCheckpointId
+        if (!isLastChance) return false
         if (!GlobalVars.canUseBoost) return false
-        if (shieldCooldown > 0) return false
-        if (nextCheckPointId == 0) return false
+        if (shieldCooldown == 3) return false
         val angleDiff = Calculator.getAngleDiff(x, y, nextCheckpoint.x, nextCheckpoint.y, angle)
         if (angleDiff > 1) return false
-        val distanceToCheckPoint: Double = Calculator.getDistance(x, y, nextCheckpoint.x, nextCheckpoint.y)
-        return distanceToCheckPoint > GlobalVars.SO_FAR
+        return true
+//        val distanceToCheckPoint: Double = Calculator.getDistance(x, y, nextCheckpoint.x, nextCheckpoint.y)
+//        return distanceToCheckPoint > GlobalVars.SO_FAR
     }
 
     fun updateOpponentPods(opponentPods: List<OpponentPod>) {
@@ -270,6 +312,7 @@ fun main() {
             input.nextInt()
         )
     }
+    GlobalVars.useBoostCheckpointId = Calculator.getFurthestCheckpointId()
     // init pod
     val myPods: List<MyPod> = (0 until GlobalVars.POD_COUNT).map { idx ->
         MyPod(id = idx, isRacer = idx == 0)
