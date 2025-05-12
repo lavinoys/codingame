@@ -57,7 +57,7 @@ object Calculator {
 
             if (distance > maxDistance) {
                 maxDistance = distance
-                furthestCheckpointId = i
+                furthestCheckpointId = (i + 1) % GlobalVars.checkpointCount
             }
         }
 
@@ -247,6 +247,7 @@ data class MyPod(
     }
 
     private fun shouldUseBoost(): Boolean {
+        System.err.println("useBoostCheckpointId: ${GlobalVars.useBoostCheckpointId}")
         val isLastChance = this.laps == (GlobalVars.laps-1) && this.nextCheckPointId == GlobalVars.useBoostCheckpointId
         if (!isLastChance) return false
         if (!GlobalVars.canUseBoost) return false
