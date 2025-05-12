@@ -1,16 +1,11 @@
 package multi.bot.madpodracing.gold
 
 import java.util.*
-import kotlin.collections.get
-import kotlin.compareTo
-import kotlin.div
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
-import kotlin.text.toDouble
-import kotlin.times
 
 object GlobalVars {
     const val MAP_MAX_X = 16000
@@ -19,6 +14,7 @@ object GlobalVars {
     const val POD_RADIUS = 400
     const val FRICTION = 0.85
     const val POD_COUNT = 2
+    const val SO_FAR = 4000
     lateinit var checkpoints: List<Checkpoint>
     var laps: Int = 0
     var checkpointCount: Int = 0
@@ -184,15 +180,18 @@ data class MyPod(
     private fun calculateThrust(): Int {
         val angleDiff = Calculator.getAngleDiff(x, y, nextCheckpoint.x, nextCheckpoint.y, angle)
         val distanceToCheckPoint: Double = Calculator.getDistance(x, y, nextCheckpoint.x, nextCheckpoint.y)
-        if (distanceToCheckPoint > 5000) {
+        if (distanceToCheckPoint > GlobalVars.SO_FAR) {
             return 100
         }
         return when {
+            angleDiff > 150 -> 5
             angleDiff > 120 -> 10
-            angleDiff > 90 -> 30
-            angleDiff > 60 -> 50
-            angleDiff > 30 -> 70
-            angleDiff > 10 -> 90
+            angleDiff > 90 -> 20
+            angleDiff > 60 -> 30
+            angleDiff > 45 -> 40
+            angleDiff > 30 -> 50
+            angleDiff > 20 -> 60
+            angleDiff > 10 -> 70
             else -> 100
         }
     }
@@ -221,9 +220,9 @@ data class MyPod(
         if (shieldCooldown > 0) return false
         if (nextCheckPointId == 0) return false
         val angleDiff = Calculator.getAngleDiff(x, y, nextCheckpoint.x, nextCheckpoint.y, angle)
-        if (angleDiff > 10) return false
+        if (angleDiff > 1) return false
         val distanceToCheckPoint: Double = Calculator.getDistance(x, y, nextCheckpoint.x, nextCheckpoint.y)
-        return distanceToCheckPoint > 5000
+        return distanceToCheckPoint > GlobalVars.SO_FAR
     }
 
     fun updateOpponentPods(opponentPods: List<OpponentPod>) {
@@ -241,7 +240,7 @@ data class MyPod(
             return "$x $y SHIELD ${getInfoStr()} SHIELD"
         }
         if (!isRacer) {
-            expectCollision(1500)?.let { (x, y) ->
+            expectCollision(1000)?.let { (x, y) ->
                 return "$x $y 100 ${getInfoStr()} rush"
             }
         }
