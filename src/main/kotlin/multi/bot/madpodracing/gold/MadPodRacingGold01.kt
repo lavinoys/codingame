@@ -197,18 +197,16 @@ data class MyPod(
     private fun calculateThrust(): Int {
         val angleDiff = Calculator.getAngleDiff(x, y, nextCheckpoint.x, nextCheckpoint.y, angle)
         val distanceToCheckPoint: Double = Calculator.getDistance(x, y, nextCheckpoint.x, nextCheckpoint.y)
-        if (distanceToCheckPoint > GlobalVars.SO_FAR && currentSpeed < 200) {
+        if (distanceToCheckPoint > GlobalVars.SO_FAR && currentSpeed < 100) {
             return 100
         }
         return when {
             angleDiff > 90 -> 5
-            angleDiff > 60 -> 20
-            angleDiff > 45 -> 40
-            angleDiff > 30 -> 50
-            angleDiff > 20 -> 60
-            angleDiff > 10 -> 70
-            angleDiff > 5 -> 80
-            angleDiff > 3 -> 90
+            angleDiff > 30 -> 30
+            angleDiff > 20 -> 50
+            angleDiff > 10 -> 60
+            angleDiff > 5 -> 70
+            angleDiff > 3 -> 80
             else -> 100
         }
     }
