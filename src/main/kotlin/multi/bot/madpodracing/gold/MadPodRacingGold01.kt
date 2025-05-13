@@ -62,6 +62,21 @@ object Calculator {
 
         return furthestCheckpointId
     }
+
+    fun sortByMostProgressed(pods: List<Pod>): List<Pod> {
+        return pods.sortedByDescending { pod ->
+            // 체크포인트 0은 첫 번째이자 마지막 체크포인트이므로 특별 처리
+            val adjustedCheckpointId = if (pod.nextCheckPointId == 0) GlobalVars.checkpointCount else pod.nextCheckPointId
+            val nextCheckpointDistance = getDistance(
+                pod.x,
+                pod.y,
+                GlobalVars.checkpoints[pod.nextCheckPointId].x,
+                GlobalVars.checkpoints[pod.nextCheckPointId].y
+            )
+            val distanceRatio = nextCheckpointDistance / 18000.0  // 거리를 0~1 사이 값으로 정규화
+            (pod.laps * 1000) + (adjustedCheckpointId * 100) - (distanceRatio * 50)  // 진행률 계산 (가중치 적용)
+        }
+    }
 }
 
 data class Checkpoint(
@@ -111,6 +126,9 @@ interface Pod {
     var vy: Int
     var angle: Int
     var nextCheckPointId: Int
+    var beforeNextCheckpointId: Int
+    var laps: Int
+    var isRacer: Boolean
 
     fun updateInfo(x: Int, y: Int, vx: Int, vy: Int, angle: Int, nextCheckPointId: Int) {
         this.x = x
@@ -119,6 +137,12 @@ interface Pod {
         this.vy = vy
         this.angle = angle
         this.nextCheckPointId = nextCheckPointId
+        if (this.beforeNextCheckpointId != nextCheckPointId) {
+            this.beforeNextCheckpointId = nextCheckPointId
+            if (nextCheckPointId == 1) {
+                this.laps ++
+            }
+        }
     }
 
     fun getNextPosition(thrust: Int = 0): Pair<Int, Int> {
@@ -147,15 +171,15 @@ data class MyPod(
     override var vy: Int = 0, // -667 ~ 667
     override var angle: Int = 0, // 0 ~ 360
     override var nextCheckPointId: Int = 0,
+    override var beforeNextCheckpointId: Int = 0,
+    override var laps: Int = 0,
+    override var isRacer: Boolean = false,
     var canUseBoost: Boolean = true,
     var currentSpeed: Double = 0.0,
     var opponentPods: List<OpponentPod> = emptyList(),
     var shieldCooldown: Int = 0,
     var nextCheckpoint: Checkpoint = GlobalVars.checkpoints[nextCheckPointId],
-    var thrust: Int = 100,
-    var beforeNextCheckpointId: Int = 0,
-    var laps: Int = 0,
-    val isRacer: Boolean
+    var thrust: Int = 100
 ): Pod {
 
     override fun updateInfo(x: Int, y: Int, vx: Int, vy: Int, angle: Int, nextCheckPointId: Int) {
@@ -163,12 +187,10 @@ data class MyPod(
         this.currentSpeed = sqrt((vx * vx + vy * vy).toDouble())
         this.shieldCooldown = (this.shieldCooldown - 1).coerceIn(0, 4)
         this.thrust = calculateThrust()
-        this.nextCheckpoint = GlobalVars.checkpoints[nextCheckPointId].getOptimize()
-        if (this.beforeNextCheckpointId != nextCheckPointId) {
-            this.beforeNextCheckpointId = nextCheckPointId
-            if (nextCheckPointId == 1) {
-                this.laps ++
-            }
+        this.nextCheckpoint = if (this.laps == GlobalVars.laps && this.nextCheckPointId == 0) {
+            GlobalVars.checkpoints[nextCheckPointId]
+        } else {
+            GlobalVars.checkpoints[nextCheckPointId].getOptimize()
         }
     }
 
@@ -179,10 +201,8 @@ data class MyPod(
             return 100
         }
         return when {
-            angleDiff > 150 -> 5
-            angleDiff > 120 -> 10
-            angleDiff > 90 -> 20
-            angleDiff > 60 -> 30
+            angleDiff > 90 -> 5
+            angleDiff > 60 -> 20
             angleDiff > 45 -> 40
             angleDiff > 30 -> 50
             angleDiff > 20 -> 60
@@ -225,7 +245,8 @@ data class MyPod(
     }
 
     fun getInfoStr(): String {
-        return "[$id] b:$canUseBoost l:$laps nci:$nextCheckPointId"
+        val role = if (isRacer) "R" else "B"
+        return "[$role] b:$canUseBoost l:$laps nci:$nextCheckPointId"
     }
 
     fun updateOpponentPods(opponentPods: List<OpponentPod>) {
@@ -258,7 +279,10 @@ data class OpponentPod(
     override var vx: Int = 0, // -667 ~ 667
     override var vy: Int = 0, // -667 ~ 667
     override var angle: Int = 0, // 0 ~ 360
-    override var nextCheckPointId: Int = 0
+    override var nextCheckPointId: Int = 0,
+    override var beforeNextCheckpointId: Int = 0,
+    override var laps: Int = 0,
+    override var isRacer: Boolean = false
 ) :Pod
 
 fun main() {
@@ -301,6 +325,10 @@ fun main() {
                 angle = input.nextInt(), // angle of opponent pod
                 nextCheckPointId = input.nextInt() // next check point id of opponent pod
             )
+        }
+
+        Calculator.sortByMostProgressed(myPods).forEachIndexed { idx, pod ->
+            pod.isRacer = idx == 0
         }
 
         myPods.forEach { pod ->
