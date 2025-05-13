@@ -187,7 +187,7 @@ data class MyPod(
         this.currentSpeed = sqrt((vx * vx + vy * vy).toDouble())
         this.shieldCooldown = (this.shieldCooldown - 1).coerceIn(0, 4)
         this.thrust = calculateThrust()
-        this.nextCheckpoint = if (this.laps == GlobalVars.laps && this.nextCheckPointId == 0) {
+        this.nextCheckpoint = if ((this.laps == GlobalVars.laps && this.nextCheckPointId == 0) || this.thrust > 300) {
             GlobalVars.checkpoints[nextCheckPointId]
         } else {
             GlobalVars.checkpoints[nextCheckPointId].getOptimize()
