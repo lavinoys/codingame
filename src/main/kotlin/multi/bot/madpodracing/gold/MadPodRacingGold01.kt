@@ -8,6 +8,7 @@ import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
+import kotlin.text.toDouble
 
 object GlobalVars {
     const val MAP_MAX_X = 16000
@@ -27,21 +28,6 @@ object Calculator {
     // 좌표간 거리 계산 (반환값 범위: 최소 0 ~ 최대 약 18357.56)
     fun getDistance(x1: Int, y1: Int, x2: Int, y2: Int): Double {
         return sqrt((x1 - x2).toDouble().pow(2) + (y1 - y2).toDouble().pow(2))
-    }
-
-    // 각도 차이 계산 (반환값 범위: 0 ~ 180)
-    fun getAngleDiff(x1: Int, y1: Int, x2: Int, y2:Int, angle: Int): Double {
-        val angleToCheckPoint: Double = getAngleToTarget(x1, y1, x2, y2)
-        val rawDiff = abs(angleToCheckPoint - angle)
-        return minOf(rawDiff, 360 - rawDiff)
-    }
-
-    // 각도 계산 (반환값 범위: 0 ~ 359)
-    fun getAngleToTarget(x1: Int, y1: Int, x2: Int, y2: Int): Double {
-        val dx = (x2 - x1).toDouble()
-        val dy = (y2 - y1).toDouble()
-        val angle = Math.toDegrees(atan2(dy, dx))
-        return if (angle < 0) angle + 360 else angle
     }
 
     // 연속된 체크포인트 중 가장 먼 거리를 가진 체크포인트의 ID 반환
@@ -86,16 +72,31 @@ data class Checkpoint(
     val x: Int,
     val y: Int,
     val nextId: Int = (id + 1) % GlobalVars.checkpointCount,
-    private val minX: Int = (x - GlobalVars.CHECKPOINT_RADIUS) + 200,
-    private val maxX: Int = (x + GlobalVars.CHECKPOINT_RADIUS) - 200,
-    private val minY: Int = (y - GlobalVars.CHECKPOINT_RADIUS) + 200,
-    private val maxY: Int = (y + GlobalVars.CHECKPOINT_RADIUS) - 200
+    private val minX: Int = (x - GlobalVars.CHECKPOINT_RADIUS),
+    private val maxX: Int = (x + GlobalVars.CHECKPOINT_RADIUS),
+    private val minY: Int = (y - GlobalVars.CHECKPOINT_RADIUS),
+    private val maxY: Int = (y + GlobalVars.CHECKPOINT_RADIUS)
 )  {
 
     private fun getNearest(targetX: Int, targetY: Int): Pair<Int, Int> {
+        // 먼저 사각형 내의 가장 가까운 지점 찾기
         val closestX = (minX..maxX).minByOrNull { abs(it - targetX) } ?: x
         val closestY = (minY..maxY).minByOrNull { abs(it - targetY) } ?: y
-        return closestX to closestY
+
+        // 찾은 지점이 실제 원 내부에 있는지 확인
+        val distToCenter = Calculator.getDistance(x, y, closestX, closestY)
+
+        // 원 내부에 있으면 그대로 반환
+        if (distToCenter <= GlobalVars.CHECKPOINT_RADIUS) {
+            return closestX to closestY
+        }
+
+        // 원 바깥에 있으면 중심에서 해당 방향으로 CHECKPOINT_RADIUS 거리에 있는 점 계산
+        val ratio = GlobalVars.CHECKPOINT_RADIUS / distToCenter
+        val adjustedX = x + ((closestX - x) * ratio).toInt()
+        val adjustedY = y + ((closestY - y) * ratio).toInt()
+
+        return adjustedX to adjustedY
     }
 
     fun getOptimize(podX: Int, podY: Int): Checkpoint {
@@ -111,6 +112,20 @@ data class Checkpoint(
             x = closestX.coerceIn(minX, maxX),
             y = closestY.coerceIn(minY, maxY),
         )
+    }
+
+    private fun getAngleByPod(podX: Int, podY: Int): Int {
+        val dx = (x - podX).toDouble()
+        val dy = (y - podY).toDouble()
+        val angle = Math.toDegrees(atan2(dy, dx)).roundToInt()
+        return if (angle < 0) angle + 360 else angle
+    }
+
+    // 0 ~ 180
+    fun angleDiff(podX: Int, podY: Int, podAngle: Int): Int {
+        val angle = getAngleByPod(podX, podY)
+        val diff = abs(angle - podAngle) % 360
+        return minOf(diff, 360 - diff)
     }
 }
 
@@ -187,7 +202,8 @@ data class MyPod(
     }
 
     private fun calculateThrust(): Int {
-        val angleDiff = Calculator.getAngleDiff(x, y, nextCheckpoint.x, nextCheckpoint.y, angle)
+        val angleDiff = nextCheckpoint.angleDiff(x, y, angle)
+        System.err.println("[$id] angleDiff: $angleDiff")
         val distanceToCheckPoint: Double = Calculator.getDistance(x, y, nextCheckpoint.x, nextCheckpoint.y)
         if (distanceToCheckPoint > GlobalVars.SO_FAR && currentSpeed < 100) {
             return 100
@@ -231,7 +247,7 @@ data class MyPod(
         if (!isLastChance) return false
         if (!canUseBoost) return false
         if (shieldCooldown == 3) return false
-        val angleDiff = Calculator.getAngleDiff(x, y, nextCheckpoint.x, nextCheckpoint.y, angle)
+        val angleDiff = nextCheckpoint.angleDiff(x, y, angle)
         if (angleDiff > 3) return false
         return true
 //        val distanceToCheckPoint: Double = Calculator.getDistance(x, y, nextCheckpoint.x, nextCheckpoint.y)
@@ -262,7 +278,7 @@ data class MyPod(
             }
         }
         if (!isRacer) {
-            expectCollision(1000)?.let { (x, y) ->
+            expectCollision(1200)?.let { (x, y) ->
                 return "$x $y 100 ${getInfoStr()} rush"
             }
         }
