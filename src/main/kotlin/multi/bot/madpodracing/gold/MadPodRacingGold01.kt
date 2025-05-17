@@ -179,10 +179,8 @@ data class MyPod(
         super.updateInfo(x, y, vx, vy, angle, nextCheckPointId)
         this.currentSpeed = sqrt((vx * vx + vy * vy).toDouble())
         this.shieldCooldown = (this.shieldCooldown - 1).coerceIn(0, 4)
-        this.nextCheckpoint = GlobalVars.checkpoints[nextCheckPointId]
-        this.nextCheckpointAngleDiff = nextCheckpoint.getAngleDiff(x, y, angle)
         this.nextCheckpoint = GlobalVars.checkpoints[nextCheckPointId].getOptimize(x, y)
-        val distance = Calculator.getDistance(x, y, nextCheckpoint.x, nextCheckpoint.y)
+        this.nextCheckpointAngleDiff = nextCheckpoint.getAngleDiff(x, y, angle)
         this.thrust = calculateThrust()
     }
 
