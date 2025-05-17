@@ -185,13 +185,54 @@ data class MyPod(
     }
 
     private fun calculateThrust(): Int {
-        return when {
-            nextCheckpointAngleDiff > 30 -> 5
-            nextCheckpointAngleDiff > 20 -> 10
-            nextCheckpointAngleDiff > 10 -> 40
-            nextCheckpointAngleDiff > 5 -> 70
-            else -> 100
+        // 체크포인트까지의 거리 계산
+        val distanceToCheckpoint = Calculator.getDistance(x, y, nextCheckpoint.x, nextCheckpoint.y)
+
+        // 다음 체크포인트 이후의 체크포인트 정보 (급격한 방향 전환 필요 여부 확인)
+        val nextNextCheckpointId = (nextCheckPointId + 1) % GlobalVars.checkpointCount
+        val nextNextCheckpoint = GlobalVars.checkpoints[nextNextCheckpointId]
+
+        // 현재 체크포인트와 다음 체크포인트 사이의 각도 계산
+        val nextAngle = atan2(
+            (nextNextCheckpoint.y - nextCheckpoint.y).toDouble(),
+            (nextNextCheckpoint.x - nextCheckpoint.x).toDouble()
+        )
+        val currentAngle = atan2(
+            (nextCheckpoint.y - y).toDouble(),
+            (nextCheckpoint.x - x).toDouble()
+        )
+        val turnAngle = abs(Math.toDegrees(nextAngle - currentAngle).roundToInt()) % 180
+
+        // 기본 추력 설정 (각도 차이에 따라 조정)
+        val baseThrust = when {
+            nextCheckpointAngleDiff > 90 -> 0   // 매우 큰 각도 차이 - 완전히 감속
+            nextCheckpointAngleDiff > 60 -> 20  // 큰 각도 차이 - 강하게 감속
+            nextCheckpointAngleDiff > 45 -> 40  // 중간 각도 차이 - 중간 감속
+            nextCheckpointAngleDiff > 30 -> 60  // 작은 각도 차이 - 약간 감속
+            nextCheckpointAngleDiff > 15 -> 80  // 미세한 각도 차이 - 약간만 감속
+            nextCheckpointAngleDiff > 5 -> 90   // 거의 직선 - 거의 최대 속도
+            else -> 100                         // 직선 - 최대 속도
         }
+
+        // 거리에 따른 추력 조정 (가까울수록 감속)
+        val distanceThrust = when {
+            distanceToCheckpoint < 600 && turnAngle > 60 -> 20  // 체크포인트 가깝고 다음 방향 전환이 큰 경우 강하게 감속
+            distanceToCheckpoint < 800 && turnAngle > 45 -> 40  // 체크포인트 가깝고 다음 방향 전환이 중간인 경우 중간 감속
+            distanceToCheckpoint < 1000 && turnAngle > 30 -> 60 // 체크포인트 가깝고 다음 방향 전환이 작은 경우 약간 감속
+            distanceToCheckpoint < 1200 -> 80                   // 체크포인트 가까운 경우 약간만 감속
+            else -> 100                                         // 체크포인트 충분히 멀리 있는 경우 최대 속도
+        }
+
+        // 속도에 따른 추력 조정 (이미 빠른 경우 각도 차이에 더 민감하게 반응)
+        val speedFactor = when {
+            currentSpeed > 400 && nextCheckpointAngleDiff > 30 -> 0   // 매우 빠르고 각도 차이가 큰 경우 완전히 감속
+            currentSpeed > 300 && nextCheckpointAngleDiff > 45 -> 20  // 빠르고 각도 차이가 큰 경우 강하게 감속
+            currentSpeed > 200 && nextCheckpointAngleDiff > 60 -> 40  // 중간 속도에 각도 차이가 큰 경우 중간 감속
+            else -> 100                                               // 그 외의 경우 최대 속도
+        }
+
+        // 최종 추력 계산 (각 요소의 최소값 사용)
+        return minOf(baseThrust, distanceThrust, speedFactor)
     }
 
     private fun expectCollision(): Pair<Int, Int>? {
@@ -318,10 +359,10 @@ data class MyPod(
                 return "$x $y 100 ${getInfoStr()} rush"
             }
         }
-        // 체크포인트로 향하는 각도 차이가 있을 때 항상 정렬 좌표를 사용하고 thrust를 100으로 설정
-        return if (nextCheckpointAngleDiff > 5) {
+        val distance = Calculator.getDistance(x, y, nextCheckpoint.x, nextCheckpoint.y)
+        return if (distance > 2500) {
             val (alignmentX, alignmentY) = getAlignmentCoordinate()
-            "$alignmentX $alignmentY 100 ${getInfoStr()} alignment"
+            "$alignmentX $alignmentY $thrust ${getInfoStr()} t:$thrust"
         } else {
             "${nextCheckpoint.x} ${nextCheckpoint.y} $thrust ${getInfoStr()} t:$thrust"
         }
