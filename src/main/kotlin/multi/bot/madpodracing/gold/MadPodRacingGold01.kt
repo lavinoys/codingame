@@ -8,7 +8,8 @@ import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
-import kotlin.text.toDouble
+import kotlin.text.toInt
+import kotlin.times
 
 object GlobalVars {
     const val MAP_MAX_X = 16000
@@ -156,21 +157,12 @@ interface Pod {
         }
     }
 
-    fun getNextPosition(thrust: Int = 0): Pair<Int, Int> {
-        // 추진력을 고려한 가속도 계산
-        val angleRad = Math.toRadians(angle.toDouble())
-        val thrustVx = thrust * cos(angleRad)
-        val thrustVy = thrust * sin(angleRad)
-
-        // 최종 속도 계산 (현재 속도 + 추진력으로 인한 가속)
-        val finalVx = (vx + thrustVx) * GlobalVars.FRICTION
-        val finalVy = (vy + thrustVy) * GlobalVars.FRICTION
-
-        // 다음 위치 계산
-        val nextX = x + finalVx
-        val nextY = y + finalVy
-
-        return Pair(nextX.roundToInt(), nextY.roundToInt())
+    fun getNextPosition(): Pair<Int, Int> {
+        val nextVx = (vx * GlobalVars.FRICTION).toInt()
+        val nextVy = (vy * GlobalVars.FRICTION).toInt()
+        val nextX = x + nextVx
+        val nextY = y + nextVy
+        return Pair(nextX, nextY)
     }
 }
 
@@ -203,7 +195,6 @@ data class MyPod(
 
     private fun calculateThrust(): Int {
         val angleDiff = nextCheckpoint.angleDiff(x, y, angle)
-        System.err.println("[$id] angleDiff: $angleDiff")
         val distanceToCheckPoint: Double = Calculator.getDistance(x, y, nextCheckpoint.x, nextCheckpoint.y)
         if (distanceToCheckPoint > GlobalVars.SO_FAR && currentSpeed < 100) {
             return 100
@@ -220,7 +211,8 @@ data class MyPod(
     }
 
     private fun expectCollision(collisionDistance: Int = 800): Pair<Int, Int>? {
-        val (nextX, nextY) = this.getNextPosition(thrust)
+        val (nextX, nextY) = this.getNextPosition()
+        System.err.println("[$id] next: $nextX, $nextY")
         opponentPods.forEach { opponentPod ->
             val (nextOpponentX, nextOpponentY) = opponentPod.getNextPosition()
             val fromNextMixed = Calculator.getDistance(nextX, nextY, nextOpponentX, nextOpponentY)
@@ -248,7 +240,7 @@ data class MyPod(
         if (!canUseBoost) return false
         if (shieldCooldown == 3) return false
         val angleDiff = nextCheckpoint.angleDiff(x, y, angle)
-        if (angleDiff > 3) return false
+        if (angleDiff > 1) return false
         return true
 //        val distanceToCheckPoint: Double = Calculator.getDistance(x, y, nextCheckpoint.x, nextCheckpoint.y)
 //        return distanceToCheckPoint > GlobalVars.SO_FAR
