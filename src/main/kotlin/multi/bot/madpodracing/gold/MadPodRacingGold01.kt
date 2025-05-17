@@ -3,10 +3,8 @@ package multi.bot.madpodracing.gold
 import java.util.*
 import kotlin.math.abs
 import kotlin.math.atan2
-import kotlin.math.cos
 import kotlin.math.pow
 import kotlin.math.roundToInt
-import kotlin.math.sin
 import kotlin.math.sqrt
 
 object GlobalVars {
@@ -72,11 +70,11 @@ data class Checkpoint(
     val nextId: Int = (id + 1) % GlobalVars.checkpointCount
 )  {
 
-    private fun getNearest(targetX: Int, targetY: Int): Pair<Int, Int> {
+    private fun getNearest(targetX: Int, targetY: Int, currentSpeed: Double = 0.0): Pair<Int, Int> {
         // 타겟 좌표와 체크포인트 중심 사이의 거리 계산
         val distToCenter = Calculator.getDistance(x, y, targetX, targetY)
 
-        val fixedRadius = GlobalVars.CHECKPOINT_RADIUS - 60
+        val fixedRadius = (GlobalVars.CHECKPOINT_RADIUS - (currentSpeed / 2)).roundToInt().coerceIn(0, 550)
 
         // 타겟이 체크포인트 내부에 있으면 타겟 좌표 그대로 반환
         if (distToCenter <= fixedRadius) {
@@ -84,7 +82,7 @@ data class Checkpoint(
         }
 
         // 타겟이 체크포인트 외부에 있으면 중심에서 타겟 방향으로 CHECKPOINT_RADIUS 거리에 있는 점 계산
-        val ratio =fixedRadius / distToCenter
+        val ratio = fixedRadius / distToCenter
         val adjustedX = x + ((targetX - x) * ratio).toInt()
         val adjustedY = y + ((targetY - y) * ratio).toInt()
 
@@ -105,10 +103,10 @@ data class Checkpoint(
         return minOf(diff, 360 - diff)
     }
 
-    fun getOptimize(podX: Int, podY: Int): Checkpoint {
+    fun getOptimize(podX: Int, podY: Int, currentSpeed: Double): Checkpoint {
         val distance = Calculator.getDistance(x, y, podX, podY)
         val (closestX, closestY) = when {
-            distance > 2000 -> { getNearest(podX, podY) }
+            distance > 2000 -> { getNearest(podX, podY, currentSpeed) }
             else -> {
                 val nextCheckpoint = GlobalVars.checkpoints[nextId]
                 getNearest(nextCheckpoint.x, nextCheckpoint.y)
@@ -179,9 +177,9 @@ data class MyPod(
 
     override fun updateInfo(x: Int, y: Int, vx: Int, vy: Int, angle: Int, nextCheckPointId: Int) {
         super.updateInfo(x, y, vx, vy, angle, nextCheckPointId)
-        this.currentSpeed = sqrt((vx * vx + vy * vy).toDouble())
+        this.currentSpeed = sqrt((vx * vx + vy * vy).toDouble()) * GlobalVars.FRICTION
         this.shieldCooldown = (this.shieldCooldown - 1).coerceIn(0, 4)
-        this.nextCheckpoint = GlobalVars.checkpoints[nextCheckPointId].getOptimize(x, y)
+        this.nextCheckpoint = GlobalVars.checkpoints[nextCheckPointId].getOptimize(x, y, currentSpeed)
         this.nextCheckpointAngleDiff = nextCheckpoint.getAngleDiff(x, y, angle)
         this.thrust = calculateThrust()
     }
