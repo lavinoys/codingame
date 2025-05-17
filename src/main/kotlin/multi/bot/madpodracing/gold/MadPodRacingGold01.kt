@@ -3,8 +3,10 @@ package multi.bot.madpodracing.gold
 import java.util.*
 import kotlin.math.abs
 import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.pow
 import kotlin.math.roundToInt
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 object GlobalVars {
@@ -14,7 +16,7 @@ object GlobalVars {
     const val POD_RADIUS = 400
     const val FRICTION = 0.85
     const val POD_COUNT = 2
-    const val SO_FAR = 2000
+    const val SO_FAR = 4000
     lateinit var checkpoints: List<Checkpoint>
     var laps: Int = 0
     var checkpointCount: Int = 0
@@ -22,7 +24,7 @@ object GlobalVars {
 }
 
 object Calculator {
-    // 좌표간 거리 계산 (반환값 범위: 최소 0 ~ 최대 약 18358)
+    // 좌표간 거리 계산 (반환값 범위: 최소 0 ~ 최대 약 18357.56)
     fun getDistance(x1: Int, y1: Int, x2: Int, y2: Int): Double {
         return sqrt((x1 - x2).toDouble().pow(2) + (y1 - y2).toDouble().pow(2))
     }
@@ -82,38 +84,32 @@ object Calculator {
 data class Checkpoint(
     val id: Int,
     val x: Int,
-    val y: Int
+    val y: Int,
+    val nextId: Int = (id + 1) % GlobalVars.checkpointCount,
+    private val minX: Int = (x - GlobalVars.CHECKPOINT_RADIUS) + 200,
+    private val maxX: Int = (x + GlobalVars.CHECKPOINT_RADIUS) - 200,
+    private val minY: Int = (y - GlobalVars.CHECKPOINT_RADIUS) + 200,
+    private val maxY: Int = (y + GlobalVars.CHECKPOINT_RADIUS) - 200
 )  {
 
-    // 특정 좌표가 체크포인트 내에 있는지 확인
-    private fun contains(pointX: Int, pointY: Int): Boolean {
-        val distance = Calculator.getDistance(x, y, pointX, pointY)
-        return distance <= GlobalVars.CHECKPOINT_RADIUS
+    private fun getNearest(targetX: Int, targetY: Int): Pair<Int, Int> {
+        val closestX = (minX..maxX).minByOrNull { abs(it - targetX) } ?: x
+        val closestY = (minY..maxY).minByOrNull { abs(it - targetY) } ?: y
+        return closestX to closestY
     }
 
-    fun getOptimize(): Checkpoint {
-        // 다음 체크포인트의 ID 계산
-        val nextId = (this.id + 1) % GlobalVars.checkpointCount
-        // 다음 체크포인트 가져오기
-        val nextCheckpoint = GlobalVars.checkpoints[nextId]
-
-        // 현재 체크포인트에서 다음 체크포인트로의 방향 벡터 계산
-        val dirX = nextCheckpoint.x - this.x
-        val dirY = nextCheckpoint.y - this.y
-
-        // 방향 벡터 정규화
-        val length = sqrt((dirX * dirX + dirY * dirY).toDouble())
-        val normX = dirX / length
-        val normY = dirY / length
-
-        // 체크포인트 반지름(경계선)에서 다음 체크포인트 방향의 좌표 계산
-        val optimizedX = (this.x + normX * GlobalVars.CHECKPOINT_RADIUS).toInt()
-        val optimizedY = (this.y + normY * GlobalVars.CHECKPOINT_RADIUS).toInt()
-
-        // 최적화된 좌표로 새 체크포인트 생성
+    fun getOptimize(podX: Int, podY: Int): Checkpoint {
+        val distance = Calculator.getDistance(x, y, podX, podY)
+        val (closestX, closestY) = when {
+            distance > 2000 -> { getNearest(podX, podY) }
+            else -> {
+                val nextCheckpoint = GlobalVars.checkpoints[nextId]
+                getNearest(nextCheckpoint.x, nextCheckpoint.y)
+            }
+        }
         return this.copy(
-            x = optimizedX,
-            y = optimizedY
+            x = closestX.coerceIn(minX, maxX),
+            y = closestY.coerceIn(minY, maxY),
         )
     }
 }
@@ -148,8 +144,8 @@ interface Pod {
     fun getNextPosition(thrust: Int = 0): Pair<Int, Int> {
         // 추진력을 고려한 가속도 계산
         val angleRad = Math.toRadians(angle.toDouble())
-        val thrustVx = thrust * kotlin.math.cos(angleRad)
-        val thrustVy = thrust * kotlin.math.sin(angleRad)
+        val thrustVx = thrust * cos(angleRad)
+        val thrustVy = thrust * sin(angleRad)
 
         // 최종 속도 계산 (현재 속도 + 추진력으로 인한 가속)
         val finalVx = (vx + thrustVx) * GlobalVars.FRICTION
@@ -186,12 +182,8 @@ data class MyPod(
         super.updateInfo(x, y, vx, vy, angle, nextCheckPointId)
         this.currentSpeed = sqrt((vx * vx + vy * vy).toDouble())
         this.shieldCooldown = (this.shieldCooldown - 1).coerceIn(0, 4)
+        this.nextCheckpoint = GlobalVars.checkpoints[nextCheckPointId].getOptimize(x, y)
         this.thrust = calculateThrust()
-        this.nextCheckpoint = if ((this.laps == GlobalVars.laps && this.nextCheckPointId == 0) || this.thrust > 300) {
-            GlobalVars.checkpoints[nextCheckPointId]
-        } else {
-            GlobalVars.checkpoints[nextCheckPointId].getOptimize()
-        }
     }
 
     private fun calculateThrust(): Int {
@@ -215,10 +207,14 @@ data class MyPod(
         val (nextX, nextY) = this.getNextPosition(thrust)
         opponentPods.forEach { opponentPod ->
             val (nextOpponentX, nextOpponentY) = opponentPod.getNextPosition()
+            val fromNextMixed = Calculator.getDistance(nextX, nextY, nextOpponentX, nextOpponentY)
+            if (fromNextMixed < collisionDistance) {
+                return Pair(nextOpponentX, nextOpponentY)
+            }
+            if (isRacer) return null
             val fromOur = Calculator.getDistance(opponentPod.x, opponentPod.y, nextX, nextY)
             val fromOpponent = Calculator.getDistance(x, y, nextOpponentX, nextOpponentY)
-            val fromNextMixed = Calculator.getDistance(nextX, nextY, nextOpponentX, nextOpponentY)
-            if (fromOur < GlobalVars.POD_RADIUS || fromOpponent < GlobalVars.POD_RADIUS || fromNextMixed < collisionDistance) {
+            if (fromOur < GlobalVars.POD_RADIUS || fromOpponent < GlobalVars.POD_RADIUS) {
                 return Pair(nextOpponentX, nextOpponentY)
             }
         }
@@ -244,7 +240,7 @@ data class MyPod(
 
     fun getInfoStr(): String {
         val role = if (isRacer) "R" else "B"
-        return "[$role] b:$canUseBoost l:$laps nci:$nextCheckPointId"
+        return "[$role] b:$canUseBoost l:$laps nci:$nextCheckPointId s:$currentSpeed"
     }
 
     fun updateOpponentPods(opponentPods: List<OpponentPod>) {
@@ -259,14 +255,18 @@ data class MyPod(
         // Shield 사용 결정
         shouldUseShield()?.let { (x, y) ->
             shieldCooldown = 4 // 현재 턴 + 3턴 쿨다운
-            return "$x $y SHIELD ${getInfoStr()} SHIELD"
+            return if (isRacer) {
+                "${nextCheckpoint.x} ${nextCheckpoint.y} SHIELD ${getInfoStr()} SHIELD"
+            } else {
+                "$x $y SHIELD ${getInfoStr()} SHIELD"
+            }
         }
         if (!isRacer) {
             expectCollision(1000)?.let { (x, y) ->
                 return "$x $y 100 ${getInfoStr()} rush"
             }
         }
-        return "${nextCheckpoint.x} ${nextCheckpoint.y} $thrust ${getInfoStr()} thrust: $thrust"
+        return "${nextCheckpoint.x} ${nextCheckpoint.y} $thrust ${getInfoStr()} t: $thrust"
     }
 }
 
