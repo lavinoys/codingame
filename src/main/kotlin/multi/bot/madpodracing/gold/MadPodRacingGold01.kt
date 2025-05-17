@@ -76,13 +76,15 @@ data class Checkpoint(
         // 타겟 좌표와 체크포인트 중심 사이의 거리 계산
         val distToCenter = Calculator.getDistance(x, y, targetX, targetY)
 
+        val fixedRadius = GlobalVars.CHECKPOINT_RADIUS - 60
+
         // 타겟이 체크포인트 내부에 있으면 타겟 좌표 그대로 반환
-        if (distToCenter <= (GlobalVars.CHECKPOINT_RADIUS-150)) {
+        if (distToCenter <= fixedRadius) {
             return targetX to targetY
         }
 
         // 타겟이 체크포인트 외부에 있으면 중심에서 타겟 방향으로 CHECKPOINT_RADIUS 거리에 있는 점 계산
-        val ratio = (GlobalVars.CHECKPOINT_RADIUS-150) / distToCenter
+        val ratio =fixedRadius / distToCenter
         val adjustedX = x + ((targetX - x) * ratio).toInt()
         val adjustedY = y + ((targetY - y) * ratio).toInt()
 
@@ -254,13 +256,14 @@ data class MyPod(
     }
 
     private fun hotFixAngle(): String? {
-        val distance = Calculator.getDistance(x, y, nextCheckpoint.x, nextCheckpoint.y)
-
         // 체크포인트에 가까이 접근했고 각도도 맞으면 보정 필요 없음
-        if (distance < 2000 && nextCheckpointAngleDiff < 10) return null
+        if (nextCheckpointAngleDiff < 1) return null
 
         // 각도 차이가 클수록 더 급격한 선회가 필요
         val angleWeight = (nextCheckpointAngleDiff / 90.0).coerceAtMost(1.0)
+
+        // 각도 조정 강도 - 값이 클수록 더 멀리 떨어진 지점으로 조정
+        val angleAdjustStrength = 600
 
         // 체크포인트 방향으로 오프셋 적용 (각도가 클수록 체크포인트 쪽으로 더 가깝게 조정)
         val dirX = (nextCheckpoint.x - x).toDouble()
@@ -268,8 +271,8 @@ data class MyPod(
         val len = sqrt(dirX * dirX + dirY * dirY)
 
         // 단위 벡터에 각도 가중치를 적용해 목표 위치 계산
-        val fixedX = nextCheckpoint.x - (dirX / len * angleWeight * 600).toInt()
-        val fixedY = nextCheckpoint.y - (dirY / len * angleWeight * 600).toInt()
+        val fixedX = nextCheckpoint.x - (dirX / len * angleWeight * angleAdjustStrength).toInt()
+        val fixedY = nextCheckpoint.y - (dirY / len * angleWeight * angleAdjustStrength).toInt()
 
         return "$fixedX $fixedY $thrust ${getInfoStr()} t:$thrust(a-fix)"
     }
