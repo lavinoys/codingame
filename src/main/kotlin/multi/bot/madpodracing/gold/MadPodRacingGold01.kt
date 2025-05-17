@@ -8,8 +8,6 @@ import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
-import kotlin.text.toInt
-import kotlin.times
 
 object GlobalVars {
     const val MAP_MAX_X = 16000
@@ -18,7 +16,6 @@ object GlobalVars {
     const val POD_RADIUS = 400
     const val FRICTION = 0.85
     const val POD_COUNT = 2
-    const val SO_FAR = 4000
     lateinit var checkpoints: List<Checkpoint>
     var laps: Int = 0
     var checkpointCount: Int = 0
@@ -110,8 +107,8 @@ data class Checkpoint(
             }
         }
         return this.copy(
-            x = closestX.coerceIn(minX, maxX),
-            y = closestY.coerceIn(minY, maxY),
+            x = closestX,
+            y = closestY,
         )
     }
 
@@ -123,7 +120,7 @@ data class Checkpoint(
     }
 
     // 0 ~ 180
-    fun angleDiff(podX: Int, podY: Int, podAngle: Int): Int {
+    fun getAngleDiff(podX: Int, podY: Int, podAngle: Int): Int {
         val angle = getAngleByPod(podX, podY)
         val diff = abs(angle - podAngle) % 360
         return minOf(diff, 360 - diff)
@@ -194,36 +191,35 @@ data class MyPod(
     }
 
     private fun calculateThrust(): Int {
-        val angleDiff = nextCheckpoint.angleDiff(x, y, angle)
-        val distanceToCheckPoint: Double = Calculator.getDistance(x, y, nextCheckpoint.x, nextCheckpoint.y)
-        if (distanceToCheckPoint > GlobalVars.SO_FAR && currentSpeed < 100) {
-            return 100
-        }
+        val angleDiff = nextCheckpoint.getAngleDiff(x, y, angle)
         return when {
             angleDiff > 90 -> 5
-            angleDiff > 30 -> 30
-            angleDiff > 20 -> 50
-            angleDiff > 10 -> 60
-            angleDiff > 5 -> 70
-            angleDiff > 3 -> 80
+            angleDiff > 75 -> 10
+            angleDiff > 45 -> 30
+            angleDiff > 30 -> 50
+            angleDiff > 10 -> 70
+            angleDiff > 5 -> 90
             else -> 100
         }
     }
 
-    private fun expectCollision(collisionDistance: Int = 800): Pair<Int, Int>? {
+    private fun expectCollision(): Pair<Int, Int>? {
+        val podRadiusPlus = GlobalVars.POD_RADIUS * 2
         val (nextX, nextY) = this.getNextPosition()
-        System.err.println("[$id] next: $nextX, $nextY")
         opponentPods.forEach { opponentPod ->
             val (nextOpponentX, nextOpponentY) = opponentPod.getNextPosition()
             val fromNextMixed = Calculator.getDistance(nextX, nextY, nextOpponentX, nextOpponentY)
-            if (fromNextMixed < collisionDistance) {
+            if (fromNextMixed < podRadiusPlus) {
+                return Pair(nextOpponentX, nextOpponentY)
+            }
+            val fromOpponent = Calculator.getDistance(x, y, nextOpponentX, nextOpponentY)
+            if (fromOpponent < podRadiusPlus) {
                 return Pair(nextOpponentX, nextOpponentY)
             }
             if (isRacer) return null
             val fromOur = Calculator.getDistance(opponentPod.x, opponentPod.y, nextX, nextY)
-            val fromOpponent = Calculator.getDistance(x, y, nextOpponentX, nextOpponentY)
-            if (fromOur < GlobalVars.POD_RADIUS || fromOpponent < GlobalVars.POD_RADIUS) {
-                return Pair(nextOpponentX, nextOpponentY)
+            if (fromOur < podRadiusPlus) {
+                return Pair(nextX, nextY)
             }
         }
         return null
@@ -239,11 +235,66 @@ data class MyPod(
         if (!isLastChance) return false
         if (!canUseBoost) return false
         if (shieldCooldown == 3) return false
-        val angleDiff = nextCheckpoint.angleDiff(x, y, angle)
+        val angleDiff = nextCheckpoint.getAngleDiff(x, y, angle)
         if (angleDiff > 1) return false
         return true
-//        val distanceToCheckPoint: Double = Calculator.getDistance(x, y, nextCheckpoint.x, nextCheckpoint.y)
-//        return distanceToCheckPoint > GlobalVars.SO_FAR
+    }
+
+    private fun shouldUseRush(): Pair<Int, Int>? {
+        val (nextX, nextY) = this.getNextPosition()
+        opponentPods.forEach { opponentPod ->
+            val (nextOpponentX, nextOpponentY) = opponentPod.getNextPosition()
+            val distance = Calculator.getDistance(nextX, nextY, nextOpponentX, nextOpponentY)
+            if (distance > 1000) return@forEach
+            return nextOpponentX to nextOpponentY
+        }
+        return null
+    }
+
+    private fun getAlignmentCoordinate(): Pair<Int, Int> {
+        val angleDiff = nextCheckpoint.getAngleDiff(this.x, this.y, this.angle)
+        if (angleDiff < 5) return nextCheckpoint.x to nextCheckpoint.y
+        // 각도 차이에 따른 보정 계수를 더 공격적으로 조정
+        val turnFactor = when {
+            angleDiff > 90 -> 0.6  // 급격한 회전 필요 - 매우 강화
+            angleDiff > 60 -> 0.7  // 중간-높은 회전 - 강화
+            angleDiff > 45 -> 0.8  // 중간 정도 회전 - 강화
+            angleDiff > 20 -> 0.9  // 약간의 회전 - 강화
+            angleDiff > 10 -> 0.95 // 미세 조정 - 강화
+            else -> 1.0            // 거의 정렬됨
+        }
+
+        // 속도에 따른 목표 거리 계수 최적화
+        val speedMultiplier = when {
+            currentSpeed > 500 -> 0.02  // 매우 빠른 속도에서는 더 날카롭게 회전
+            currentSpeed > 400 -> 0.022 // 빠른 속도 조정
+            currentSpeed > 300 -> 0.025 // 중간 속도 조정
+            else -> 0.03               // 느린 속도
+        }
+        val distanceFactor = (currentSpeed * speedMultiplier).coerceIn(1.0, 5.0) // 최대값 감소
+
+        // 목표 지점과 현재 위치 사이의 단위 벡터 계산
+        val dx = nextCheckpoint.x - this.x
+        val dy = nextCheckpoint.y - this.y
+        val distance = sqrt((dx * dx + dy * dy).toDouble())
+
+        // 현재 각도 방향의 단위 벡터 계산 (라디안으로 변환)
+        val angleRad = Math.toRadians(this.angle.toDouble())
+        val dirX = cos(angleRad)
+        val dirY = sin(angleRad)
+
+        // 속도에 따라 기본 거리 조정
+        val baseDistance = when {
+            currentSpeed > 400 -> 2200
+            currentSpeed > 300 -> 2000
+            else -> 1800
+        }
+
+        // 최종 목표 좌표 계산 (현재 방향과 목표 방향의 가중 평균)
+        val newX = this.x + ((dx / distance) * turnFactor + dirX * (1 - turnFactor)) * distanceFactor * baseDistance
+        val newY = this.y + ((dy / distance) * turnFactor + dirY * (1 - turnFactor)) * distanceFactor * baseDistance
+
+        return Pair(newX.roundToInt().coerceIn(0, GlobalVars.MAP_MAX_X), newY.roundToInt().coerceIn(0, GlobalVars.MAP_MAX_Y))
     }
 
     fun getInfoStr(): String {
@@ -270,11 +321,16 @@ data class MyPod(
             }
         }
         if (!isRacer) {
-            expectCollision(1200)?.let { (x, y) ->
+            shouldUseRush()?.let { (x, y) ->
                 return "$x $y 100 ${getInfoStr()} rush"
             }
         }
-        return "${nextCheckpoint.x} ${nextCheckpoint.y} $thrust ${getInfoStr()} t: $thrust"
+        val (alignmentX, alignmentY) = getAlignmentCoordinate()
+        return if (currentSpeed > 300) {
+            "$alignmentX $alignmentY 100 ${getInfoStr()} align"
+        } else {
+            "${nextCheckpoint.x} ${nextCheckpoint.y} $thrust ${getInfoStr()} t:$thrust"
+        }
     }
 }
 
