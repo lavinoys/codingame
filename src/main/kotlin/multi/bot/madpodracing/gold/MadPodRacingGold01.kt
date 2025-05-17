@@ -89,7 +89,7 @@ data class Checkpoint(
         return adjustedX to adjustedY
     }
 
-    private fun getAngleByPod(podX: Int, podY: Int): Int {
+    fun getAngleByPod(podX: Int, podY: Int): Int {
         val dx = (x - podX).toDouble()
         val dy = (y - podY).toDouble()
         val angle = Math.toDegrees(atan2(dy, dx)).roundToInt()
@@ -248,9 +248,30 @@ data class MyPod(
         return null
     }
 
-    fun getInfoStr(): String {
+    private fun getInfoStr(): String {
         val role = if (isRacer) "R" else "B"
-        return "[$role] b:$canUseBoost l:$laps nci:$nextCheckPointId s:${currentSpeed.roundToInt()}"
+        return "[$role] l:${laps}nci:${nextCheckPointId}s:${currentSpeed.roundToInt()}ad:$nextCheckpointAngleDiff"
+    }
+
+    private fun hotFixAngle(): String? {
+        val distance = Calculator.getDistance(x, y, nextCheckpoint.x, nextCheckpoint.y)
+
+        // 체크포인트에 가까이 접근했고 각도도 맞으면 보정 필요 없음
+        if (distance < 2000 && nextCheckpointAngleDiff < 10) return null
+
+        // 각도 차이가 클수록 더 급격한 선회가 필요
+        val angleWeight = (nextCheckpointAngleDiff / 90.0).coerceAtMost(1.0)
+
+        // 체크포인트 방향으로 오프셋 적용 (각도가 클수록 체크포인트 쪽으로 더 가깝게 조정)
+        val dirX = (nextCheckpoint.x - x).toDouble()
+        val dirY = (nextCheckpoint.y - y).toDouble()
+        val len = sqrt(dirX * dirX + dirY * dirY)
+
+        // 단위 벡터에 각도 가중치를 적용해 목표 위치 계산
+        val fixedX = nextCheckpoint.x - (dirX / len * angleWeight * 600).toInt()
+        val fixedY = nextCheckpoint.y - (dirY / len * angleWeight * 600).toInt()
+
+        return "$fixedX $fixedY $thrust ${getInfoStr()} t:$thrust(a-fix)"
     }
 
     fun updateOpponentPods(opponentPods: List<OpponentPod>) {
@@ -275,6 +296,10 @@ data class MyPod(
             shouldUseRush()?.let { (x, y) ->
                 return "$x $y 100 ${getInfoStr()} rush"
             }
+        }
+        val hotFix = hotFixAngle()
+        if (hotFix != null) {
+            return hotFix
         }
         return "${nextCheckpoint.x} ${nextCheckpoint.y} $thrust ${getInfoStr()} t:$thrust"
     }
