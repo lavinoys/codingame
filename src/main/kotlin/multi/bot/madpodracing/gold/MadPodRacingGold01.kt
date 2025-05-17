@@ -69,30 +69,22 @@ data class Checkpoint(
     val id: Int,
     val x: Int,
     val y: Int,
-    val nextId: Int = (id + 1) % GlobalVars.checkpointCount,
-    private val minX: Int = (x - (GlobalVars.CHECKPOINT_RADIUS/2)),
-    private val maxX: Int = (x + (GlobalVars.CHECKPOINT_RADIUS/2)),
-    private val minY: Int = (y - (GlobalVars.CHECKPOINT_RADIUS/2)),
-    private val maxY: Int = (y + (GlobalVars.CHECKPOINT_RADIUS/2))
+    val nextId: Int = (id + 1) % GlobalVars.checkpointCount
 )  {
 
     private fun getNearest(targetX: Int, targetY: Int): Pair<Int, Int> {
-        // 먼저 사각형 내의 가장 가까운 지점 찾기
-        val closestX = (minX..maxX).minByOrNull { abs(it - targetX) } ?: x
-        val closestY = (minY..maxY).minByOrNull { abs(it - targetY) } ?: y
+        // 타겟 좌표와 체크포인트 중심 사이의 거리 계산
+        val distToCenter = Calculator.getDistance(x, y, targetX, targetY)
 
-        // 찾은 지점이 실제 원 내부에 있는지 확인
-        val distToCenter = Calculator.getDistance(x, y, closestX, closestY)
-
-        // 원 내부에 있으면 그대로 반환
+        // 타겟이 체크포인트 내부에 있으면 타겟 좌표 그대로 반환
         if (distToCenter <= GlobalVars.CHECKPOINT_RADIUS) {
-            return closestX to closestY
+            return targetX to targetY
         }
 
-        // 원 바깥에 있으면 중심에서 해당 방향으로 CHECKPOINT_RADIUS 거리에 있는 점 계산
+        // 타겟이 체크포인트 외부에 있으면 중심에서 타겟 방향으로 CHECKPOINT_RADIUS 거리에 있는 점 계산
         val ratio = GlobalVars.CHECKPOINT_RADIUS / distToCenter
-        val adjustedX = x + ((closestX - x) * ratio).toInt()
-        val adjustedY = y + ((closestY - y) * ratio).toInt()
+        val adjustedX = x + ((targetX - x) * ratio).toInt()
+        val adjustedY = y + ((targetY - y) * ratio).toInt()
 
         return adjustedX to adjustedY
     }
@@ -250,26 +242,19 @@ data class MyPod(
     }
 
     private fun getAlignmentCoordinate(): Pair<Int, Int> {
-        // 각도 차이에 따른 보정 계수를 더 공격적으로 조정
-        val turnFactor = when {
-            nextCheckpointAngleDiff > 90 -> 0.85  // 급격한 회전 필요 - 매우 강화
-            nextCheckpointAngleDiff > 60 -> 0.80  // 중간-높은 회전 - 강화
-            nextCheckpointAngleDiff > 45 -> 0.75  // 중간 정도 회전 - 강화
-            nextCheckpointAngleDiff > 20 -> 0.70  // 약간의 회전 - 강화
-            nextCheckpointAngleDiff > 10 -> 0.65  // 미세 조정 - 강화
-            nextCheckpointAngleDiff > 5 -> 0.60   // 더 미세한 조정
-            else -> 0.55            // 매우 정밀한 조정
-        }
+        // 체크포인트를 향해갈때 각도의 차이만큼 좌표를 이동시킨다.
+        // 좌표 이동의 목적은 체크포인트로 향하는 각도 차이를 빠르게 0으로 만드는것이 목적
 
-        // 속도에 따른 목표 거리 계수 최적화
-        val speedMultiplier = when {
-            currentSpeed > 500 -> 0.015  // 매우 빠른 속도에서는 더 날카롭게 회전
-            currentSpeed > 400 -> 0.018  // 빠른 속도 조정
-            currentSpeed > 300 -> 0.020  // 중간 속도 조정
-            currentSpeed > 200 -> 0.025  // 느린 속도
-            else -> 0.030               // 매우 느린 속도
+        // 각도 차이에 따른 보정 계수를 더 공격적으로 조정 (각도 차이가 클수록 더 강한 보정)
+        val turnFactor = when {
+            nextCheckpointAngleDiff > 90 -> 0.95  // 급격한 회전 필요 - 매우 강화
+            nextCheckpointAngleDiff > 60 -> 0.90  // 중간-높은 회전 - 강화
+            nextCheckpointAngleDiff > 45 -> 0.85  // 중간 정도 회전 - 강화
+            nextCheckpointAngleDiff > 20 -> 0.80  // 약간의 회전 - 강화
+            nextCheckpointAngleDiff > 10 -> 0.75  // 미세 조정 - 강화
+            nextCheckpointAngleDiff > 5 -> 0.70   // 더 미세한 조정
+            else -> 0.65            // 매우 정밀한 조정
         }
-        val distanceFactor = (currentSpeed * speedMultiplier).coerceIn(0.8, 4.0) // 최소값과 최대값 조정
 
         // 목표 지점과 현재 위치 사이의 단위 벡터 계산
         val dx = nextCheckpoint.x - this.x
@@ -281,30 +266,33 @@ data class MyPod(
         val dirX = cos(angleRad)
         val dirY = sin(angleRad)
 
-        // 속도와 각도 차이에 따라 기본 거리 동적 조정
+        // 기본 거리 설정 (각도 차이가 클수록 더 짧게)
         val baseDistance = when {
-            nextCheckpointAngleDiff > 60 -> 1500 - (nextCheckpointAngleDiff * 5).coerceAtMost(500)
-            currentSpeed > 500 -> 2400
-            currentSpeed > 400 -> 2200
-            currentSpeed > 300 -> 2000
-            currentSpeed > 200 -> 1800
-            else -> 1600
+            nextCheckpointAngleDiff > 90 -> 1000
+            nextCheckpointAngleDiff > 60 -> 1200
+            nextCheckpointAngleDiff > 30 -> 1500
+            nextCheckpointAngleDiff > 10 -> 1800
+            else -> 2000
         }
 
         // 최종 목표 좌표 계산 (현재 방향과 목표 방향의 가중 평균)
-        // turnFactor를 직접 사용하는 대신 보정 강도를 높임
-        val targetWeight = turnFactor + (1 - turnFactor) * 0.5 // 목표 방향의 가중치 강화
-        val currentWeight = 1 - targetWeight // 현재 방향의 가중치
+        // 각도 차이가 클수록 목표 방향의 가중치를 높임
+        val targetWeight = turnFactor  // 목표 방향의 가중치 강화
+        val currentWeight = 1 - targetWeight  // 현재 방향의 가중치
 
-        val newX = this.x + ((dx / distance) * targetWeight + dirX * currentWeight) * distanceFactor * baseDistance
-        val newY = this.y + ((dy / distance) * targetWeight + dirY * currentWeight) * distanceFactor * baseDistance
+        // 각도 차이에 따라 더 강한 보정을 적용
+        val angleCorrection = nextCheckpointAngleDiff / 90.0  // 0 ~ 1 사이 값
+        val correctionFactor = 1.0 + angleCorrection  // 1 ~ 2 사이 값
+
+        val newX = this.x + ((dx / distance) * targetWeight + dirX * currentWeight) * baseDistance * correctionFactor
+        val newY = this.y + ((dy / distance) * targetWeight + dirY * currentWeight) * baseDistance * correctionFactor
 
         return Pair(newX.roundToInt().coerceIn(0, GlobalVars.MAP_MAX_X), newY.roundToInt().coerceIn(0, GlobalVars.MAP_MAX_Y))
     }
 
     fun getInfoStr(): String {
         val role = if (isRacer) "R" else "B"
-        return "[$role] b:$canUseBoost l:$laps nci:$nextCheckPointId s:$currentSpeed"
+        return "[$role] b:$canUseBoost l:$laps nci:$nextCheckPointId s:${currentSpeed.roundToInt()}"
     }
 
     fun updateOpponentPods(opponentPods: List<OpponentPod>) {
@@ -330,8 +318,8 @@ data class MyPod(
                 return "$x $y 100 ${getInfoStr()} rush"
             }
         }
-        val distance = Calculator.getDistance(x, y, nextCheckpoint.x, nextCheckpoint.y)
-        return if (distance > 5000) {
+        // 체크포인트로 향하는 각도 차이가 있을 때 항상 정렬 좌표를 사용하고 thrust를 100으로 설정
+        return if (nextCheckpointAngleDiff > 5) {
             val (alignmentX, alignmentY) = getAlignmentCoordinate()
             "$alignmentX $alignmentY 100 ${getInfoStr()} alignment"
         } else {
