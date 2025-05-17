@@ -77,12 +77,12 @@ data class Checkpoint(
         val distToCenter = Calculator.getDistance(x, y, targetX, targetY)
 
         // 타겟이 체크포인트 내부에 있으면 타겟 좌표 그대로 반환
-        if (distToCenter <= (GlobalVars.CHECKPOINT_RADIUS-50)) {
+        if (distToCenter <= (GlobalVars.CHECKPOINT_RADIUS-150)) {
             return targetX to targetY
         }
 
         // 타겟이 체크포인트 외부에 있으면 중심에서 타겟 방향으로 CHECKPOINT_RADIUS 거리에 있는 점 계산
-        val ratio = (GlobalVars.CHECKPOINT_RADIUS-50) / distToCenter
+        val ratio = (GlobalVars.CHECKPOINT_RADIUS-150) / distToCenter
         val adjustedX = x + ((targetX - x) * ratio).toInt()
         val adjustedY = y + ((targetY - y) * ratio).toInt()
 
@@ -301,11 +301,11 @@ data class MyPod(
             if (fromNextMixed < podRadiusPlus) {
                 return Pair(nextOpponentX, nextOpponentY)
             }
+            if (isRacer) return null
             val fromOpponent = Calculator.getDistance(x, y, nextOpponentX, nextOpponentY)
             if (fromOpponent < podRadiusPlus) {
                 return Pair(nextOpponentX, nextOpponentY)
             }
-            if (isRacer) return null
             val fromOur = Calculator.getDistance(opponentPod.x, opponentPod.y, nextX, nextY)
             if (fromOur < podRadiusPlus) {
                 return Pair(nextX, nextY)
