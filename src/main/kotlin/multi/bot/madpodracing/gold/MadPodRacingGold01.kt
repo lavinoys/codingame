@@ -70,10 +70,10 @@ data class Checkpoint(
     val x: Int,
     val y: Int,
     val nextId: Int = (id + 1) % GlobalVars.checkpointCount,
-    private val minX: Int = (x - GlobalVars.CHECKPOINT_RADIUS),
-    private val maxX: Int = (x + GlobalVars.CHECKPOINT_RADIUS),
-    private val minY: Int = (y - GlobalVars.CHECKPOINT_RADIUS),
-    private val maxY: Int = (y + GlobalVars.CHECKPOINT_RADIUS)
+    private val minX: Int = (x - (GlobalVars.CHECKPOINT_RADIUS/2)),
+    private val maxX: Int = (x + (GlobalVars.CHECKPOINT_RADIUS/2)),
+    private val minY: Int = (y - (GlobalVars.CHECKPOINT_RADIUS/2)),
+    private val maxY: Int = (y + (GlobalVars.CHECKPOINT_RADIUS/2))
 )  {
 
     private fun getNearest(targetX: Int, targetY: Int): Pair<Int, Int> {
@@ -179,7 +179,8 @@ data class MyPod(
     var opponentPods: List<OpponentPod> = emptyList(),
     var shieldCooldown: Int = 0,
     var nextCheckpoint: Checkpoint = GlobalVars.checkpoints[nextCheckPointId],
-    var thrust: Int = 100
+    var thrust: Int = 100,
+    var nextCheckpointAngleDiff: Int = 0
 ): Pod {
 
     override fun updateInfo(x: Int, y: Int, vx: Int, vy: Int, angle: Int, nextCheckPointId: Int) {
@@ -187,18 +188,16 @@ data class MyPod(
         this.currentSpeed = sqrt((vx * vx + vy * vy).toDouble())
         this.shieldCooldown = (this.shieldCooldown - 1).coerceIn(0, 4)
         this.nextCheckpoint = GlobalVars.checkpoints[nextCheckPointId].getOptimize(x, y)
+        this.nextCheckpointAngleDiff = nextCheckpoint.getAngleDiff(x, y, angle)
         this.thrust = calculateThrust()
     }
 
     private fun calculateThrust(): Int {
-        val angleDiff = nextCheckpoint.getAngleDiff(x, y, angle)
         return when {
-            angleDiff > 90 -> 5
-            angleDiff > 75 -> 10
-            angleDiff > 45 -> 30
-            angleDiff > 30 -> 50
-            angleDiff > 10 -> 70
-            angleDiff > 5 -> 90
+            nextCheckpointAngleDiff > 30 -> 5
+            nextCheckpointAngleDiff > 20 -> 10
+            nextCheckpointAngleDiff > 10 -> 40
+            nextCheckpointAngleDiff > 5 -> 70
             else -> 100
         }
     }
@@ -235,8 +234,7 @@ data class MyPod(
         if (!isLastChance) return false
         if (!canUseBoost) return false
         if (shieldCooldown == 3) return false
-        val angleDiff = nextCheckpoint.getAngleDiff(x, y, angle)
-        if (angleDiff > 1) return false
+        if (nextCheckpointAngleDiff > 1) return false
         return true
     }
 
@@ -252,26 +250,26 @@ data class MyPod(
     }
 
     private fun getAlignmentCoordinate(): Pair<Int, Int> {
-        val angleDiff = nextCheckpoint.getAngleDiff(this.x, this.y, this.angle)
-        if (angleDiff < 5) return nextCheckpoint.x to nextCheckpoint.y
         // 각도 차이에 따른 보정 계수를 더 공격적으로 조정
         val turnFactor = when {
-            angleDiff > 90 -> 0.6  // 급격한 회전 필요 - 매우 강화
-            angleDiff > 60 -> 0.7  // 중간-높은 회전 - 강화
-            angleDiff > 45 -> 0.8  // 중간 정도 회전 - 강화
-            angleDiff > 20 -> 0.9  // 약간의 회전 - 강화
-            angleDiff > 10 -> 0.95 // 미세 조정 - 강화
-            else -> 1.0            // 거의 정렬됨
+            nextCheckpointAngleDiff > 90 -> 0.85  // 급격한 회전 필요 - 매우 강화
+            nextCheckpointAngleDiff > 60 -> 0.80  // 중간-높은 회전 - 강화
+            nextCheckpointAngleDiff > 45 -> 0.75  // 중간 정도 회전 - 강화
+            nextCheckpointAngleDiff > 20 -> 0.70  // 약간의 회전 - 강화
+            nextCheckpointAngleDiff > 10 -> 0.65  // 미세 조정 - 강화
+            nextCheckpointAngleDiff > 5 -> 0.60   // 더 미세한 조정
+            else -> 0.55            // 매우 정밀한 조정
         }
 
         // 속도에 따른 목표 거리 계수 최적화
         val speedMultiplier = when {
-            currentSpeed > 500 -> 0.02  // 매우 빠른 속도에서는 더 날카롭게 회전
-            currentSpeed > 400 -> 0.022 // 빠른 속도 조정
-            currentSpeed > 300 -> 0.025 // 중간 속도 조정
-            else -> 0.03               // 느린 속도
+            currentSpeed > 500 -> 0.015  // 매우 빠른 속도에서는 더 날카롭게 회전
+            currentSpeed > 400 -> 0.018  // 빠른 속도 조정
+            currentSpeed > 300 -> 0.020  // 중간 속도 조정
+            currentSpeed > 200 -> 0.025  // 느린 속도
+            else -> 0.030               // 매우 느린 속도
         }
-        val distanceFactor = (currentSpeed * speedMultiplier).coerceIn(1.0, 5.0) // 최대값 감소
+        val distanceFactor = (currentSpeed * speedMultiplier).coerceIn(0.8, 4.0) // 최소값과 최대값 조정
 
         // 목표 지점과 현재 위치 사이의 단위 벡터 계산
         val dx = nextCheckpoint.x - this.x
@@ -283,16 +281,23 @@ data class MyPod(
         val dirX = cos(angleRad)
         val dirY = sin(angleRad)
 
-        // 속도에 따라 기본 거리 조정
+        // 속도와 각도 차이에 따라 기본 거리 동적 조정
         val baseDistance = when {
+            nextCheckpointAngleDiff > 60 -> 1500 - (nextCheckpointAngleDiff * 5).coerceAtMost(500)
+            currentSpeed > 500 -> 2400
             currentSpeed > 400 -> 2200
             currentSpeed > 300 -> 2000
-            else -> 1800
+            currentSpeed > 200 -> 1800
+            else -> 1600
         }
 
         // 최종 목표 좌표 계산 (현재 방향과 목표 방향의 가중 평균)
-        val newX = this.x + ((dx / distance) * turnFactor + dirX * (1 - turnFactor)) * distanceFactor * baseDistance
-        val newY = this.y + ((dy / distance) * turnFactor + dirY * (1 - turnFactor)) * distanceFactor * baseDistance
+        // turnFactor를 직접 사용하는 대신 보정 강도를 높임
+        val targetWeight = turnFactor + (1 - turnFactor) * 0.5 // 목표 방향의 가중치 강화
+        val currentWeight = 1 - targetWeight // 현재 방향의 가중치
+
+        val newX = this.x + ((dx / distance) * targetWeight + dirX * currentWeight) * distanceFactor * baseDistance
+        val newY = this.y + ((dy / distance) * targetWeight + dirY * currentWeight) * distanceFactor * baseDistance
 
         return Pair(newX.roundToInt().coerceIn(0, GlobalVars.MAP_MAX_X), newY.roundToInt().coerceIn(0, GlobalVars.MAP_MAX_Y))
     }
@@ -325,9 +330,10 @@ data class MyPod(
                 return "$x $y 100 ${getInfoStr()} rush"
             }
         }
-        val (alignmentX, alignmentY) = getAlignmentCoordinate()
-        return if (currentSpeed > 300) {
-            "$alignmentX $alignmentY 100 ${getInfoStr()} align"
+        val distance = Calculator.getDistance(x, y, nextCheckpoint.x, nextCheckpoint.y)
+        return if (distance > 5000) {
+            val (alignmentX, alignmentY) = getAlignmentCoordinate()
+            "$alignmentX $alignmentY 100 ${getInfoStr()} alignment"
         } else {
             "${nextCheckpoint.x} ${nextCheckpoint.y} $thrust ${getInfoStr()} t:$thrust"
         }
