@@ -81,7 +81,7 @@ data class Checkpoint(
         // 타겟 좌표와 체크포인트 중심 사이의 거리 계산
         val distToCenter = Calculator.getDistance(this.x, this.y, targetX, targetY)
 
-        val fixedRadius = (GlobalVars.CHECKPOINT_RADIUS - (currentSpeed / 2)).roundToInt().coerceIn(0, 500)
+        val fixedRadius = (GlobalVars.CHECKPOINT_RADIUS - (currentSpeed / 2)).roundToInt().coerceIn(0, 300)
         val (fixedX, fixedY) = getMinMaxCoordinates(fixedRadius)
         val (fixedMinX, fixedMaxY) = fixedX
         val (fixedMaxX, fixedMinY) = fixedY
@@ -195,16 +195,12 @@ data class MyPod(
     }
 
     private fun calculateThrust(): Int {
-        // 기본 추력 설정 (각도 차이에 따라 더 세밀하게 조정)
         val baseThrust = when {
-            nextCheckpointAngleDiff > 90 -> 5    // 매우 큰 각도 차이 - 거의 정지
-            nextCheckpointAngleDiff > 75 -> 15   // 상당히 큰 각도 차이 - 매우 강하게 감속
-            nextCheckpointAngleDiff > 60 -> 30   // 큰 각도 차이 - 강하게 감속
-            nextCheckpointAngleDiff > 45 -> 50   // 중간 각도 차이 - 중간 감속
-            nextCheckpointAngleDiff > 30 -> 70   // 작은 각도 차이 - 약간 감속
-            nextCheckpointAngleDiff > 15 -> 85   // 미세한 각도 차이 - 약간만 감속
-            nextCheckpointAngleDiff > 5 -> 95    // 거의 직선 - 거의 최대 속도
-            else -> 100                          // 직선 - 최대 속도
+            nextCheckpointAngleDiff > 45 -> 5
+            nextCheckpointAngleDiff > 30 -> 20
+            nextCheckpointAngleDiff > 15 -> 40
+            nextCheckpointAngleDiff > 5 -> 95
+            else -> 100
         }
 
         // 최종 추력 계산 (각 요소의 최소값 사용)
@@ -252,7 +248,7 @@ data class MyPod(
         opponentPods.forEach { opponentPod ->
             val (nextOpponentX, nextOpponentY) = opponentPod.getNextPosition()
             val distance = Calculator.getDistance(nextX, nextY, nextOpponentX, nextOpponentY)
-            if (distance > 1200) return@forEach
+            if (distance > GlobalVars.POD_RADIUS * 3) return@forEach
             return nextOpponentX to nextOpponentY
         }
         return null
@@ -263,15 +259,15 @@ data class MyPod(
         return "[$role] l:${laps}nci:${nextCheckPointId}s:${currentSpeed.roundToInt()}ad:$nextCheckpointAngleDiff"
     }
 
-    private fun hotFixAngle(): String? {
+    private fun hotFixAngle(): Pair<Int, Int> {
         val distCheckpoint = Calculator.getDistance(x, y, nextCheckpoint.x, nextCheckpoint.y)
-        if (distCheckpoint < 1500) return null
+        if (distCheckpoint < 2000) return nextCheckpoint.x to nextCheckpoint.y
 
         // 각도 차이가 클수록 더 급격한 선회가 필요
         val angleWeight = (nextCheckpointAngleDiff / 90.0).coerceAtMost(1.0)
 
         // 각도 조정 강도 - 값이 클수록 더 멀리 떨어진 지점으로 조정
-        val angleAdjustStrength = 600
+        val angleAdjustStrength = 2000
 
         // 체크포인트 방향으로 오프셋 적용 (각도가 클수록 체크포인트 쪽으로 더 가깝게 조정)
         val dirX = (nextCheckpoint.x - x).toDouble()
@@ -282,7 +278,7 @@ data class MyPod(
         val fixedX = nextCheckpoint.x - (dirX / len * angleWeight * angleAdjustStrength).toInt()
         val fixedY = nextCheckpoint.y - (dirY / len * angleWeight * angleAdjustStrength).toInt()
 
-        return "$fixedX $fixedY $thrust ${getInfoStr()}t:${thrust}f"
+        return fixedX.coerceIn(0, GlobalVars.MAP_MAX_X) to fixedY.coerceIn(0, GlobalVars.MAP_MAX_Y)
     }
 
     fun updateOpponentPods(opponentPods: List<OpponentPod>) {
@@ -291,8 +287,9 @@ data class MyPod(
 
     fun commandStr(): String {
         if (shouldUseBoost()) {
+            val (fixedX, fixedY) = hotFixAngle()
             canUseBoost = false
-            return "${nextCheckpoint.x} ${nextCheckpoint.y} BOOST ${getInfoStr()} BOOST"
+            return "$fixedX $fixedY BOOST ${getInfoStr()} BOOST"
         }
         // Shield 사용 결정
         shouldUseShield()?.let { (x, y) ->
@@ -308,11 +305,8 @@ data class MyPod(
                 return "$x $y 100 ${getInfoStr()} RUSH"
             }
         }
-        val hotFix = hotFixAngle()
-        if (hotFix != null) {
-            return hotFix
-        }
-        return "${nextCheckpoint.x} ${nextCheckpoint.y} $thrust ${getInfoStr()}t:$thrust"
+        val (fixedX, fixedY) = hotFixAngle()
+        return "$fixedX $fixedY $thrust ${getInfoStr()}t:$thrust"
     }
 }
 
