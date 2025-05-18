@@ -70,7 +70,7 @@ data class Checkpoint(
 )  {
 
     private fun getMinMaxCoordinates(): Pair<Pair<Int, Int>, Pair<Int, Int>> {
-        val fixedRadius = GlobalVars.CHECKPOINT_RADIUS - 10
+        val fixedRadius = GlobalVars.CHECKPOINT_RADIUS - 100
         val minX = (this.x - fixedRadius).coerceIn(0, GlobalVars.MAP_MAX_X)
         val maxX = (this.x + fixedRadius).coerceIn(0, GlobalVars.MAP_MAX_X)
         val minY = (this.y - fixedRadius).coerceIn(0, GlobalVars.MAP_MAX_Y)
@@ -202,19 +202,17 @@ data class MyPod(
             nextCheckpoint.x,
             nextCheckpoint.y
         )
-
-        if (currentSpeed > 200 && distanceToNextCheckpoint < 1500 && doubleNextCheckpointAngleDiff > 15) {
+        if (currentSpeed > 200 && distanceToNextCheckpoint < 1500 && doubleNextCheckpointAngleDiff > 45) {
             return 1
         }
-
         val baseThrust = when {
+            nextCheckpointAngleDiff > 90 -> 10
             nextCheckpointAngleDiff > 45 -> 40
             nextCheckpointAngleDiff > 30 -> 60
             nextCheckpointAngleDiff > 15 -> 80
             nextCheckpointAngleDiff > 5 -> 95
             else -> 100
         }
-
         // 최종 추력 계산 (각 요소의 최소값 사용)
         return baseThrust.coerceIn(0, 100)
     }
