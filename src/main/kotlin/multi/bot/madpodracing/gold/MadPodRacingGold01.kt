@@ -3,7 +3,6 @@ package multi.bot.madpodracing.gold
 import java.util.*
 import kotlin.math.abs
 import kotlin.math.atan2
-import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
@@ -23,7 +22,7 @@ object GlobalVars {
 object Calculator {
     // 좌표간 거리 계산 (반환값 범위: 최소 0 ~ 최대 약 18357.56)
     fun getDistance(x1: Int, y1: Int, x2: Int, y2: Int): Double {
-        return sqrt((x1 - x2).toDouble().pow(2) + (y1 - y2).toDouble().pow(2))
+        return sqrt((x1 - x2).toDouble().let { it * it} + (y1 - y2).toDouble().let { it * it})
     }
 
     // 연속된 체크포인트 중 가장 먼 거리를 가진 체크포인트의 ID 반환
@@ -265,8 +264,8 @@ data class MyPod(
     }
 
     private fun hotFixAngle(): String? {
-        // 체크포인트에 가까이 접근했고 각도도 맞으면 보정 필요 없음
-        if (nextCheckpointAngleDiff < 1) return null
+        val distCheckpoint = Calculator.getDistance(x, y, nextCheckpoint.x, nextCheckpoint.y)
+        if (distCheckpoint < 1500) return null
 
         // 각도 차이가 클수록 더 급격한 선회가 필요
         val angleWeight = (nextCheckpointAngleDiff / 90.0).coerceAtMost(1.0)
