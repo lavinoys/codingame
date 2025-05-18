@@ -70,23 +70,34 @@ data class Checkpoint(
     val nextId: Int = (id + 1) % GlobalVars.checkpointCount
 )  {
 
+    private fun getMinMaxCoordinates(radius: Int): Pair<Pair<Int, Int>, Pair<Int, Int>> {
+        val minX = (this.x - radius).coerceIn(0, GlobalVars.MAP_MAX_X)
+        val maxX = (this.x + radius).coerceIn(0, GlobalVars.MAP_MAX_X)
+        val minY = (this.y - radius).coerceIn(0, GlobalVars.MAP_MAX_Y)
+        val maxY = (this.y + radius).coerceIn(0, GlobalVars.MAP_MAX_Y)
+        return Pair(Pair(minX, maxY), Pair(maxX, minY))
+    }
+
     private fun getNearest(targetX: Int, targetY: Int, currentSpeed: Double = 0.0): Pair<Int, Int> {
         // 타겟 좌표와 체크포인트 중심 사이의 거리 계산
-        val distToCenter = Calculator.getDistance(x, y, targetX, targetY)
+        val distToCenter = Calculator.getDistance(this.x, this.y, targetX, targetY)
 
-        val fixedRadius = (GlobalVars.CHECKPOINT_RADIUS - (currentSpeed / 2)).roundToInt().coerceIn(0, 550)
+        val fixedRadius = (GlobalVars.CHECKPOINT_RADIUS - (currentSpeed / 2)).roundToInt().coerceIn(0, 500)
+        val (fixedX, fixedY) = getMinMaxCoordinates(fixedRadius)
+        val (fixedMinX, fixedMaxY) = fixedX
+        val (fixedMaxX, fixedMinY) = fixedY
 
         // 타겟이 체크포인트 내부에 있으면 타겟 좌표 그대로 반환
         if (distToCenter <= fixedRadius) {
-            return targetX to targetY
+            return targetX.coerceIn(fixedMinX, fixedMaxX) to targetY.coerceIn(fixedMinY, fixedMaxY)
         }
 
         // 타겟이 체크포인트 외부에 있으면 중심에서 타겟 방향으로 CHECKPOINT_RADIUS 거리에 있는 점 계산
         val ratio = fixedRadius / distToCenter
-        val adjustedX = x + ((targetX - x) * ratio).toInt()
-        val adjustedY = y + ((targetY - y) * ratio).toInt()
+        val adjustedX = this.x + ((targetX - this.x) * ratio).toInt()
+        val adjustedY = this.y + ((targetY - this.y) * ratio).toInt()
 
-        return adjustedX to adjustedY
+        return adjustedX.coerceIn(fixedMinX, fixedMaxX) to adjustedY.coerceIn(fixedMinY, fixedMaxY)
     }
 
     fun getAngleByPod(podX: Int, podY: Int): Int {
@@ -211,7 +222,7 @@ data class MyPod(
                 return Pair(nextOpponentX, nextOpponentY)
             }
             if (isRacer) return null
-            val fromOpponent = Calculator.getDistance(x, y, nextOpponentX, nextOpponentY)
+            val fromOpponent = Calculator.getDistance(this.x, this.y, nextOpponentX, nextOpponentY)
             if (fromOpponent < podRadiusPlus) {
                 return Pair(nextOpponentX, nextOpponentY)
             }
@@ -242,7 +253,7 @@ data class MyPod(
         opponentPods.forEach { opponentPod ->
             val (nextOpponentX, nextOpponentY) = opponentPod.getNextPosition()
             val distance = Calculator.getDistance(nextX, nextY, nextOpponentX, nextOpponentY)
-            if (distance > 1000) return@forEach
+            if (distance > 1200) return@forEach
             return nextOpponentX to nextOpponentY
         }
         return null
@@ -272,7 +283,7 @@ data class MyPod(
         val fixedX = nextCheckpoint.x - (dirX / len * angleWeight * angleAdjustStrength).toInt()
         val fixedY = nextCheckpoint.y - (dirY / len * angleWeight * angleAdjustStrength).toInt()
 
-        return "$fixedX $fixedY $thrust ${getInfoStr()} t:$thrust(a-fix)"
+        return "$fixedX $fixedY $thrust ${getInfoStr()}t:${thrust}f"
     }
 
     fun updateOpponentPods(opponentPods: List<OpponentPod>) {
@@ -295,14 +306,14 @@ data class MyPod(
         }
         if (!isRacer) {
             shouldUseRush()?.let { (x, y) ->
-                return "$x $y 100 ${getInfoStr()} rush"
+                return "$x $y 100 ${getInfoStr()} RUSH"
             }
         }
         val hotFix = hotFixAngle()
         if (hotFix != null) {
             return hotFix
         }
-        return "${nextCheckpoint.x} ${nextCheckpoint.y} $thrust ${getInfoStr()} t:$thrust"
+        return "${nextCheckpoint.x} ${nextCheckpoint.y} $thrust ${getInfoStr()}t:$thrust"
     }
 }
 
