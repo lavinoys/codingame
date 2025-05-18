@@ -69,30 +69,30 @@ data class Checkpoint(
     val nextId: Int = (id + 1) % GlobalVars.checkpointCount
 )  {
 
-    private fun getMinMaxCoordinates(radius: Int): Pair<Pair<Int, Int>, Pair<Int, Int>> {
-        val minX = (this.x - radius).coerceIn(0, GlobalVars.MAP_MAX_X)
-        val maxX = (this.x + radius).coerceIn(0, GlobalVars.MAP_MAX_X)
-        val minY = (this.y - radius).coerceIn(0, GlobalVars.MAP_MAX_Y)
-        val maxY = (this.y + radius).coerceIn(0, GlobalVars.MAP_MAX_Y)
+    private fun getMinMaxCoordinates(): Pair<Pair<Int, Int>, Pair<Int, Int>> {
+        val fixedRadius = GlobalVars.CHECKPOINT_RADIUS - 10
+        val minX = (this.x - fixedRadius).coerceIn(0, GlobalVars.MAP_MAX_X)
+        val maxX = (this.x + fixedRadius).coerceIn(0, GlobalVars.MAP_MAX_X)
+        val minY = (this.y - fixedRadius).coerceIn(0, GlobalVars.MAP_MAX_Y)
+        val maxY = (this.y + fixedRadius).coerceIn(0, GlobalVars.MAP_MAX_Y)
         return Pair(Pair(minX, maxY), Pair(maxX, minY))
     }
 
-    private fun getNearest(targetX: Int, targetY: Int, currentSpeed: Double = 0.0): Pair<Int, Int> {
+    private fun getNearest(targetX: Int, targetY: Int): Pair<Int, Int> {
         // 타겟 좌표와 체크포인트 중심 사이의 거리 계산
         val distToCenter = Calculator.getDistance(this.x, this.y, targetX, targetY)
 
-        val fixedRadius = (GlobalVars.CHECKPOINT_RADIUS - (currentSpeed / 2)).roundToInt().coerceIn(0, 300)
-        val (fixedX, fixedY) = getMinMaxCoordinates(fixedRadius)
+        val (fixedX, fixedY) = getMinMaxCoordinates()
         val (fixedMinX, fixedMaxY) = fixedX
         val (fixedMaxX, fixedMinY) = fixedY
 
         // 타겟이 체크포인트 내부에 있으면 타겟 좌표 그대로 반환
-        if (distToCenter <= fixedRadius) {
+        if (distToCenter <= GlobalVars.CHECKPOINT_RADIUS) {
             return targetX.coerceIn(fixedMinX, fixedMaxX) to targetY.coerceIn(fixedMinY, fixedMaxY)
         }
 
         // 타겟이 체크포인트 외부에 있으면 중심에서 타겟 방향으로 CHECKPOINT_RADIUS 거리에 있는 점 계산
-        val ratio = fixedRadius / distToCenter
+        val ratio = GlobalVars.CHECKPOINT_RADIUS / distToCenter
         val adjustedX = this.x + ((targetX - this.x) * ratio).toInt()
         val adjustedY = this.y + ((targetY - this.y) * ratio).toInt()
 
@@ -113,15 +113,9 @@ data class Checkpoint(
         return minOf(diff, 360 - diff)
     }
 
-    fun getOptimize(podX: Int, podY: Int, currentSpeed: Double): Checkpoint {
-        val distance = Calculator.getDistance(x, y, podX, podY)
-        val (closestX, closestY) = when {
-            distance > 2000 -> { getNearest(podX, podY, currentSpeed) }
-            else -> {
-                val nextCheckpoint = GlobalVars.checkpoints[nextId]
-                getNearest(nextCheckpoint.x, nextCheckpoint.y)
-            }
-        }
+    fun getOptimize(podX: Int, podY: Int): Checkpoint {
+        if (this.id == 0) return this
+        val (closestX, closestY) = getNearest(podX, podY)
         return this.copy(
             x = closestX.coerceIn(0, GlobalVars.MAP_MAX_X),
             y = closestY.coerceIn(0, GlobalVars.MAP_MAX_Y),
@@ -156,7 +150,7 @@ interface Pod {
         }
     }
 
-    fun getNextPosition(): Pair<Int, Int> {
+    fun getNextCoordinate(): Pair<Int, Int> {
         val nextVx = (vx * GlobalVars.FRICTION).toInt()
         val nextVy = (vy * GlobalVars.FRICTION).toInt()
         val nextX = x + nextVx
@@ -180,25 +174,43 @@ data class MyPod(
     var currentSpeed: Double = 0.0,
     var opponentPods: List<OpponentPod> = emptyList(),
     var shieldCooldown: Int = 0,
-    var nextCheckpoint: Checkpoint = GlobalVars.checkpoints[nextCheckPointId],
     var thrust: Int = 100,
-    var nextCheckpointAngleDiff: Int = 0
+    var nextCheckpoint: Checkpoint = GlobalVars.checkpoints[nextCheckPointId],
+    var nextCheckpointAngleDiff: Int = 0,
+    var doubleNextCheckpointId: Int = 0,
+    var doubleNextCheckpoint: Checkpoint = GlobalVars.checkpoints[nextCheckPointId],
+    var doubleNextCheckpointAngleDiff: Int = 0,
 ): Pod {
 
     override fun updateInfo(x: Int, y: Int, vx: Int, vy: Int, angle: Int, nextCheckPointId: Int) {
         super.updateInfo(x, y, vx, vy, angle, nextCheckPointId)
         this.currentSpeed = sqrt((vx * vx + vy * vy).toDouble()) * GlobalVars.FRICTION
         this.shieldCooldown = (this.shieldCooldown - 1).coerceIn(0, 4)
-        this.nextCheckpoint = GlobalVars.checkpoints[nextCheckPointId].getOptimize(x, y, currentSpeed)
+        this.nextCheckpoint = GlobalVars.checkpoints[nextCheckPointId].getOptimize(x, y)
         this.nextCheckpointAngleDiff = nextCheckpoint.getAngleDiff(x, y, angle)
+        this.doubleNextCheckpointId = (nextCheckPointId + 1) % GlobalVars.checkpointCount
+        this.doubleNextCheckpoint = GlobalVars.checkpoints[doubleNextCheckpointId]
+        this.doubleNextCheckpointAngleDiff = doubleNextCheckpoint.getAngleDiff(x, y, angle)
         this.thrust = calculateThrust()
     }
 
     private fun calculateThrust(): Int {
+        val (nextX, nextY) = getNextCoordinate()
+        val distanceToNextCheckpoint = Calculator.getDistance(
+            nextX,
+            nextY,
+            nextCheckpoint.x,
+            nextCheckpoint.y
+        )
+
+        if (currentSpeed > 200 && distanceToNextCheckpoint < 1500 && doubleNextCheckpointAngleDiff > 15) {
+            return 1
+        }
+
         val baseThrust = when {
-            nextCheckpointAngleDiff > 45 -> 5
-            nextCheckpointAngleDiff > 30 -> 20
-            nextCheckpointAngleDiff > 15 -> 40
+            nextCheckpointAngleDiff > 45 -> 40
+            nextCheckpointAngleDiff > 30 -> 60
+            nextCheckpointAngleDiff > 15 -> 80
             nextCheckpointAngleDiff > 5 -> 95
             else -> 100
         }
@@ -209,9 +221,9 @@ data class MyPod(
 
     private fun expectCollision(): Pair<Int, Int>? {
         val podRadiusPlus = GlobalVars.POD_RADIUS * 2
-        val (nextX, nextY) = this.getNextPosition()
+        val (nextX, nextY) = this.getNextCoordinate()
         opponentPods.forEach { opponentPod ->
-            val (nextOpponentX, nextOpponentY) = opponentPod.getNextPosition()
+            val (nextOpponentX, nextOpponentY) = opponentPod.getNextCoordinate()
             val fromNextMixed = Calculator.getDistance(nextX, nextY, nextOpponentX, nextOpponentY)
             if (fromNextMixed < podRadiusPlus) {
                 return Pair(nextOpponentX, nextOpponentY)
@@ -244,9 +256,9 @@ data class MyPod(
     }
 
     private fun shouldUseRush(): Pair<Int, Int>? {
-        val (nextX, nextY) = this.getNextPosition()
+        val (nextX, nextY) = this.getNextCoordinate()
         opponentPods.forEach { opponentPod ->
-            val (nextOpponentX, nextOpponentY) = opponentPod.getNextPosition()
+            val (nextOpponentX, nextOpponentY) = opponentPod.getNextCoordinate()
             val distance = Calculator.getDistance(nextX, nextY, nextOpponentX, nextOpponentY)
             if (distance > GlobalVars.POD_RADIUS * 3) return@forEach
             return nextOpponentX to nextOpponentY
