@@ -142,14 +142,23 @@ data class OurPod(
     fun calculateThrust(): Int {
         val driftAngle = (angleOfVelocityVector - angle).let { ((it + 180) % 360) - 180 }
         val isDrifting = abs(driftAngle) > 30 // 드리프트 임계값 설정
+        // 체크포인트에 가깝고 각도가 큰 경우
         if (nextCheckPointDistance < GameConstants.CHECKPOINT_RADIUS * 2 && abs(nextCheckPointAngle) > 30) {
-            // thrust를 낮춰 관성으로 미끄러지게 함 (검색 결과 [1] 참고)
-            return if (abs(nextCheckPointAngle) > 45) 1 else 50
-        } else {
-            if (isDrifting && nextCheckPointDistance < GameConstants.CHECKPOINT_RADIUS * 3) {
-                return 1
+            // thrust를 낮춰 관성으로 미끄러지게 함
+            return when {
+                abs(nextCheckPointAngle) > 90 -> 1  // 90도 이상이면 최소 추력
+                else -> {
+                    // 30도~90도 사이에서 선형적으로 감소 (90도에 가까울수록 추력 감소)
+                    val ratio = (90 - abs(nextCheckPointAngle)) / 60.0  // 30도에서 1.0, 90도에서 0.0
+                    (ratio * 75 + 5).roundToInt()  // 추력 범위 5~80
+                }
             }
         }
+        // 드리프트 중이고 체크포인트에 가까운 경우
+        if (isDrifting && nextCheckPointDistance < GameConstants.CHECKPOINT_RADIUS * 1.5) {
+            return 1
+        }
+        // 일반적인 경우: 거리에 비례한 추력 계산
         val thrustByDistance = GameConstants.MAX_THRUST * (nextCheckPointDistance / (3 * GameConstants.CHECKPOINT_RADIUS))
         return thrustByDistance.roundToInt().coerceIn(10, GameConstants.MAX_THRUST)
     }
@@ -160,35 +169,30 @@ data class OurPod(
             val desiredAngle = Math.toRadians(
                 ((angle + 360) % 360 + (nextCheckPointAngle - angle) * 0.5) % 360
             )
-
             // 체크포인트로부터의 방향 오프셋 계산
-            val offsetX = GameConstants.CHECKPOINT_RADIUS * 0.8 * cos(desiredAngle)
-            val offsetY = GameConstants.CHECKPOINT_RADIUS * 0.8 * sin(desiredAngle)
-
+            val offsetX = GameConstants.CHECKPOINT_RADIUS * 0.6 * cos(desiredAngle)
+            val offsetY = GameConstants.CHECKPOINT_RADIUS * 0.6 * sin(desiredAngle)
             // 체크포인트 중심 기준으로 위치 계산
-            outputX = (nextCheckPoint.x + offsetX).roundToInt()
-            outputY = (nextCheckPoint.y + offsetY).roundToInt()
-
+            var targetX = (nextCheckPoint.x + offsetX).roundToInt()
+            var targetY = (nextCheckPoint.y + offsetY).roundToInt()
             // 원형 영역 제한: 체크포인트 중심에서 목표 지점까지의 거리 계산
             val distanceToCenter = sqrt(
-                (outputX - nextCheckPoint.x).toDouble().pow(2) +
-                        (outputY - nextCheckPoint.y).toDouble().pow(2)
+                (targetX - nextCheckPoint.x).toDouble().pow(2) +
+                        (targetY - nextCheckPoint.y).toDouble().pow(2)
             )
-
             // 거리가 체크포인트 반경을 초과하면 원형 경계로 조정
             if (distanceToCenter > GameConstants.CHECKPOINT_RADIUS) {
                 val ratio = GameConstants.CHECKPOINT_RADIUS / distanceToCenter
-                outputX = (nextCheckPoint.x + (outputX - nextCheckPoint.x) * ratio).roundToInt()
-                outputY = (nextCheckPoint.y + (outputY - nextCheckPoint.y) * ratio).roundToInt()
+                targetX = (nextCheckPoint.x + (targetX - nextCheckPoint.x) * ratio).roundToInt()
+                targetY = (nextCheckPoint.y + (targetY - nextCheckPoint.y) * ratio).roundToInt()
             }
-
-            return Pair(outputX, outputY)
+            return Pair(targetX, targetY)
         }
         return nextCheckPoint.x to nextCheckPoint.y
     }
 
     fun outputAction(): String {
-        return "${this.outputX} ${this.outputX} $outputThrust [${this.id}]x:${this.outputX}y:${this.outputY}t:${this.outputThrust}"
+        return "${this.outputX} ${this.outputY} $outputThrust [${this.id}]x:${this.outputX}y:${this.outputY}t:${this.outputThrust}"
     }
 }
 
