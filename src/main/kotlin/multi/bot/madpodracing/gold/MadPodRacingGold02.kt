@@ -1,8 +1,17 @@
 package com.me.codingame.multi.bot.madpodracing.gold
 
 import java.util.*
+import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.pow
+import kotlin.math.roundToInt
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 object GameConstants {
+    const val MAX_WIDTH = 16000
+    const val MAX_HEIGHT = 9000
     const val POD_RADIUS = 400
     const val CHECKPOINT_RADIUS = 600
     const val MAX_THRUST = 100
@@ -54,8 +63,17 @@ data class OurPod(
     var vx: Int = 0,
     var vy: Int = 0,
     var angle: Int = 0,
+    var speed: Double = 0.0,
+    var velocityAngle: Double = 0.0,
+    var magnitudeOfVelocity: Double = 0.0,
+    var angleOfVelocityVector: Double = 0.0,
     var nextCheckPointId: Int = 1,
-    var nextCheckPoint: CheckPoint = GameConstants.CHECKPOINT_LIST[nextCheckPointId]
+    var nextCheckPoint: CheckPoint = GameConstants.CHECKPOINT_LIST[nextCheckPointId],
+    var nextCheckPointDistance: Double = 0.0,
+    var nextCheckPointAngle: Double = 0.0,
+    var outputX: Int = 0,
+    var outputY: Int = 0,
+    var outputThrust: Int = GameConstants.MAX_THRUST
 ) {
     fun update(
         x: Int,
@@ -72,11 +90,105 @@ data class OurPod(
         this.angle = angle
         this.nextCheckPointId = nextCheckPointId
 
+        this.speed = sqrt((this.vx * this.vx + this.vy * this.vy).toDouble())
+        this.velocityAngle = Math.toDegrees(
+            atan2(
+                this.vy.toDouble(),
+                this.vx.toDouble()
+            )
+        ).let {
+            ((it + 360) % 360).coerceIn(0.0, 360.0)
+        }
+        this.magnitudeOfVelocity = sqrt(
+            (vx.toDouble().pow(2.0) + vy.toDouble().pow(2.0))
+        ).coerceIn(0.0, GameConstants.MAX_SPEED.toDouble())
+        this.angleOfVelocityVector = Math.toDegrees(
+            atan2(
+                vy.toDouble(),
+                vx.toDouble()
+            )
+        ).let {
+            ((it + 360) % 360).coerceIn(0.0, 360.0)
+        }
+
         this.nextCheckPoint = GameConstants.CHECKPOINT_LIST[nextCheckPointId]
+        this.nextCheckPointDistance = calculateNextCheckPointDistance()
+        this.nextCheckPointAngle = calculateNextCheckPointAngle()
+        calculateOutputPosition().let { (outputX, outputY) ->
+            this.outputX = outputX
+            this.outputY = outputY
+        }
+        this.outputThrust = calculateThrust()
+    }
+
+    fun calculateNextCheckPointDistance(): Double {
+        return sqrt(
+            (nextCheckPoint.x - x).toDouble().pow(2.0) + (nextCheckPoint.y - y).toDouble().pow(2.0)
+        ).coerceIn(0.0, 18357.0)
+    }
+
+    fun calculateNextCheckPointAngle(): Double {
+        val dx = nextCheckPoint.x - x
+        val dy = nextCheckPoint.y - y
+        val angle = Math.toDegrees(
+            atan2(
+                dy.toDouble(),
+                dx.toDouble()
+            )
+        )
+        return ((angle + 360) % 360).coerceIn(0.0, 360.0)
+    }
+
+    fun calculateThrust(): Int {
+        val driftAngle = (angleOfVelocityVector - angle).let { ((it + 180) % 360) - 180 }
+        val isDrifting = abs(driftAngle) > 30 // 드리프트 임계값 설정
+        if (nextCheckPointDistance < GameConstants.CHECKPOINT_RADIUS * 2 && abs(nextCheckPointAngle) > 30) {
+            // thrust를 낮춰 관성으로 미끄러지게 함 (검색 결과 [1] 참고)
+            return if (abs(nextCheckPointAngle) > 45) 1 else 50
+        } else {
+            if (isDrifting && nextCheckPointDistance < GameConstants.CHECKPOINT_RADIUS * 3) {
+                return 1
+            }
+        }
+        val thrustByDistance = GameConstants.MAX_THRUST * (nextCheckPointDistance / (3 * GameConstants.CHECKPOINT_RADIUS))
+        return thrustByDistance.roundToInt().coerceIn(10, GameConstants.MAX_THRUST)
+    }
+
+    fun calculateOutputPosition(): Pair<Int, Int> {
+        if (nextCheckPointDistance < GameConstants.CHECKPOINT_RADIUS * 2 && abs(nextCheckPointAngle) > 30) {
+            // 중간 각도로 보정
+            val desiredAngle = Math.toRadians(
+                ((angle + 360) % 360 + (nextCheckPointAngle - angle) * 0.5) % 360
+            )
+
+            // 체크포인트로부터의 방향 오프셋 계산
+            val offsetX = GameConstants.CHECKPOINT_RADIUS * 0.8 * cos(desiredAngle)
+            val offsetY = GameConstants.CHECKPOINT_RADIUS * 0.8 * sin(desiredAngle)
+
+            // 체크포인트 중심 기준으로 위치 계산
+            outputX = (nextCheckPoint.x + offsetX).roundToInt()
+            outputY = (nextCheckPoint.y + offsetY).roundToInt()
+
+            // 원형 영역 제한: 체크포인트 중심에서 목표 지점까지의 거리 계산
+            val distanceToCenter = sqrt(
+                (outputX - nextCheckPoint.x).toDouble().pow(2) +
+                        (outputY - nextCheckPoint.y).toDouble().pow(2)
+            )
+
+            // 거리가 체크포인트 반경을 초과하면 원형 경계로 조정
+            if (distanceToCenter > GameConstants.CHECKPOINT_RADIUS) {
+                val ratio = GameConstants.CHECKPOINT_RADIUS / distanceToCenter
+                outputX = (nextCheckPoint.x + (outputX - nextCheckPoint.x) * ratio).roundToInt()
+                outputY = (nextCheckPoint.y + (outputY - nextCheckPoint.y) * ratio).roundToInt()
+            }
+
+            return Pair(outputX, outputY)
+        }
+        return nextCheckPoint.x to nextCheckPoint.y
     }
 
     fun outputAction(): String {
-        return "${nextCheckPoint.x} ${nextCheckPoint.y} ${GameConstants.MAX_THRUST}"
+        return "${this.outputX} ${this.outputX} $outputThrust [${this.id}]x:${this.outputX}y:${this.outputY}t:${this.outputThrust}"
     }
 }
 
